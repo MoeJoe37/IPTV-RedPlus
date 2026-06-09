@@ -1,0 +1,2 @@
+-keep class com.redplus.iptv.data.remote.** { *; }
+-keepattributes Signature
