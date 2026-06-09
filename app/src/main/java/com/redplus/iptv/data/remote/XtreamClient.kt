@@ -36,9 +36,37 @@ class XtreamClient(
     suspend fun seriesInfo(serverUrl: String, username: String, password: String, seriesId: String): SeriesInfoResponse = get(serverUrl, username, password, "get_series_info", mapOf("series_id" to seriesId), SeriesInfoResponse::class.java)
     suspend fun shortEpg(serverUrl: String, username: String, password: String, streamId: String, limit: Int = 4): EpgResponse = get(serverUrl, username, password, "get_short_epg", mapOf("stream_id" to streamId, "limit" to limit.toString()), EpgResponse::class.java)
 
-    fun buildLiveUrl(serverUrl: String, username: String, password: String, streamId: String): String = "${normalizeServer(serverUrl)}/live/${username.urlPart()}/${password.urlPart()}/$streamId.ts"
-    fun buildMovieUrl(serverUrl: String, username: String, password: String, streamId: String, extension: String?): String = "${normalizeServer(serverUrl)}/movie/${username.urlPart()}/${password.urlPart()}/$streamId.${extension.cleanExtension("mp4")}"
-    fun buildSeriesUrl(serverUrl: String, username: String, password: String, episodeId: String, extension: String?): String = "${normalizeServer(serverUrl)}/series/${username.urlPart()}/${password.urlPart()}/$episodeId.${extension.cleanExtension("mp4")}"
+    fun buildLiveUrl(serverUrl: String, username: String, password: String, streamId: String): String = buildLiveUrls(serverUrl, username, password, streamId, null).first()
+    fun buildMovieUrl(serverUrl: String, username: String, password: String, streamId: String, extension: String?): String = buildMovieUrls(serverUrl, username, password, streamId, extension).first()
+    fun buildSeriesUrl(serverUrl: String, username: String, password: String, episodeId: String, extension: String?): String = buildSeriesUrls(serverUrl, username, password, episodeId, extension).first()
+
+    fun buildLiveUrls(serverUrl: String, username: String, password: String, streamId: String, directSource: String?): List<String> {
+        val base = normalizeServer(serverUrl)
+        val user = username.urlPart()
+        val pass = password.urlPart()
+        return listOfNotNull(
+            directSource?.takeIf { it.isNotBlank() },
+            "$base/live/$user/$pass/$streamId.ts",
+            "$base/live/$user/$pass/$streamId.m3u8",
+            "$base/live/$user/$pass/$streamId"
+        )
+    }
+
+    fun buildMovieUrls(serverUrl: String, username: String, password: String, streamId: String, extension: String?): List<String> {
+        val base = normalizeServer(serverUrl)
+        val user = username.urlPart()
+        val pass = password.urlPart()
+        val ext = extension.cleanExtension("mp4")
+        return listOf("$base/movie/$user/$pass/$streamId.$ext", "$base/movie/$user/$pass/$streamId")
+    }
+
+    fun buildSeriesUrls(serverUrl: String, username: String, password: String, episodeId: String, extension: String?): List<String> {
+        val base = normalizeServer(serverUrl)
+        val user = username.urlPart()
+        val pass = password.urlPart()
+        val ext = extension.cleanExtension("mp4")
+        return listOf("$base/series/$user/$pass/$episodeId.$ext", "$base/series/$user/$pass/$episodeId")
+    }
 
     private fun optionalCategory(categoryId: String?): Map<String, String> = if (categoryId.isNullOrBlank() || categoryId == "all") emptyMap() else mapOf("category_id" to categoryId)
 

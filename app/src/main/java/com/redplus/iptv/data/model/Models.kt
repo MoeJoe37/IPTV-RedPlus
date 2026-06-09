@@ -31,7 +31,8 @@ data class ContentItem(
     val genre: String? = null,
     val plot: String? = null,
     val streamExtension: String? = null,
-    val channelNumber: Int? = null
+    val channelNumber: Int? = null,
+    val directSource: String? = null
 )
 
 data class CategoryItem(val id: String, val name: String)
@@ -47,7 +48,7 @@ fun CategoryDto.toCategoryItem(): CategoryItem = CategoryItem(id = categoryId.or
 
 fun LiveStreamDto.toContentItem(type: ContentType = ContentType.LIVE): ContentItem = ContentItem(
     id = streamId?.toString().orEmpty(), type = type, title = name.orEmpty().ifBlank { "Untitled Channel" },
-    image = streamIcon, categoryId = categoryId, channelNumber = num
+    image = streamIcon, categoryId = categoryId, channelNumber = num, directSource = directSource
 )
 
 fun VodStreamDto.toContentItem(): ContentItem = ContentItem(

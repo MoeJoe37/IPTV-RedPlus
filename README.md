@@ -127,3 +127,16 @@ Timeout waiting to lock journal cache (C:\Users\<user>\.gradle\caches\journal-1)
 ```
 
 If a future build error mentions a lock inside `.gradle-user-home`, close Android Studio and any Java/Gradle processes, delete the `.gradle-user-home` folder, and run `BUILD.bat` again. The folder is only a build cache and will be recreated automatically.
+
+## Version 1.0.1 UI / Playback Fixes
+
+This package includes the phone-focused UI and playback fix update:
+
+- Fixed `SQLiteBlobTooBigException / CursorWindow` by moving large Xtream API cache JSON out of Room rows and into file-based cache storage.
+- Added Android cleartext HTTP support because many legal Xtream providers still serve streams over `http://`.
+- Improved the player HTTP data source with IPTV-friendly timeouts, redirects, and a RedPlus user-agent.
+- Added automatic live stream fallback formats: `.ts`, `.m3u8`, and no-extension URL where applicable.
+- Reworked screens for compact phone layouts: smaller headers, horizontal categories, tighter cards, compact channel rows, and cleaner error screens.
+- Fixed dark text on dark background by forcing premium light text as the app content color.
+
+If you update from an older test APK and still see old cached data, open Settings and press **Clear cache**, or uninstall the older APK once before installing this version.

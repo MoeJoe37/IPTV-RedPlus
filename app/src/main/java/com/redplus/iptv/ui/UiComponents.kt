@@ -19,10 +19,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -46,7 +49,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,9 +77,11 @@ import com.redplus.iptv.ui.theme.PremiumRed
 
 @Composable
 fun PremiumBackground(content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxSize().background(Brush.radialGradient(colors = listOf(Color(0xFF29223A), PremiumBg, Color.Black), radius = 1400f))) {
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000)))))
-        content()
+    CompositionLocalProvider(LocalContentColor provides com.redplus.iptv.ui.theme.PremiumText) {
+        Box(Modifier.fillMaxSize().background(Brush.radialGradient(colors = listOf(Color(0xFF181B2A), PremiumBg, Color.Black), radius = 1200f))) {
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xDD000000)))))
+            content()
+        }
     }
 }
 
@@ -83,10 +90,10 @@ fun GlassPanel(modifier: Modifier = Modifier, focused: Boolean = false, onClick:
     var hasFocus by remember { mutableStateOf(false) }
     val active = focused || hasFocus
     Card(
-        modifier = modifier.shadow(if (active) 16.dp else 4.dp, RoundedCornerShape(24.dp)).then(if (onClick != null) Modifier.clickable { onClick() } else Modifier).onFocusChanged { hasFocus = it.isFocused }.focusable(),
-        colors = CardDefaults.cardColors(containerColor = if (active) Color(0xCC2A3044) else PremiumPanel),
+        modifier = modifier.shadow(if (active) 10.dp else 2.dp, RoundedCornerShape(18.dp)).then(if (onClick != null) Modifier.clickable { onClick() } else Modifier).onFocusChanged { hasFocus = it.isFocused }.focusable(),
+        colors = CardDefaults.cardColors(containerColor = if (active) Color(0xCC2A3044) else PremiumPanel, contentColor = com.redplus.iptv.ui.theme.PremiumText),
         border = BorderStroke(if (active) 1.5.dp else 1.dp, if (active) PremiumRed else Color.White.copy(alpha = .10f)),
-        shape = RoundedCornerShape(24.dp)
+        shape = RoundedCornerShape(18.dp)
     ) { content() }
 }
 
@@ -119,13 +126,30 @@ fun LoadingState(message: String = "Loading...") {
 @Composable
 fun ErrorState(message: String, detail: String? = null, onRetry: (() -> Unit)? = null, onBack: (() -> Unit)? = null) {
     var expanded by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        GlassPanel(Modifier.fillMaxWidth()) { Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Something went wrong", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp)); Text(message, color = PremiumMuted); Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) { if (onBack != null) TextButton(onClick = onBack) { Text("Back") }; if (onRetry != null) Button(onClick = onRetry) { Text("Retry") } }
-            if (!detail.isNullOrBlank()) { TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide technical info" else "More info") }; AnimatedVisibility(expanded) { Text(detail, color = PremiumMuted, style = MaterialTheme.typography.bodySmall) } }
-        } }
+    Box(Modifier.fillMaxSize().padding(14.dp), contentAlignment = Alignment.Center) {
+        GlassPanel(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Something went wrong", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = com.redplus.iptv.ui.theme.PremiumText)
+                Spacer(Modifier.height(8.dp))
+                Text(message, color = PremiumMuted)
+                Spacer(Modifier.height(14.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (onRetry != null) Button(onClick = onRetry) { Text("Retry") }
+                    if (onBack != null) TextButton(onClick = onBack) { Text("Back") }
+                }
+                if (!detail.isNullOrBlank()) {
+                    TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "Hide technical info" else "More info") }
+                    AnimatedVisibility(expanded) {
+                        Text(
+                            detail,
+                            color = PremiumMuted,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).verticalScroll(rememberScrollState())
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -176,7 +200,7 @@ fun CategorySidebar(categories: List<Pair<String, String>>, selected: String, on
 
 @Composable
 fun PosterGrid(items: List<ContentItem>, onClick: (ContentItem) -> Unit, modifier: Modifier = Modifier) {
-    LazyVerticalGrid(columns = GridCells.Adaptive(150.dp), modifier = modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyVerticalGrid(columns = GridCells.Adaptive(118.dp), modifier = modifier, contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         items(items, key = { it.type.name + it.id }) { item -> PosterCard(item = item, onClick = { onClick(item) }) }
     }
 }
