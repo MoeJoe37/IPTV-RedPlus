@@ -20,6 +20,10 @@ android {
 
     buildTypes {
         release {
+            // One-click local release APK: signed with the standard debug keystore so it can be installed directly.
+            // For Play Store/public distribution, replace this with your own private release signing config.
+            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

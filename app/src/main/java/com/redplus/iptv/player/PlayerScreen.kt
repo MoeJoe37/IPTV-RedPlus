@@ -184,6 +184,7 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
     val activity = context as? Activity
     var urlIndex by remember(streamUrls) { mutableIntStateOf(0) }
     val streamUrl = streamUrls.getOrElse(urlIndex) { streamUrls.first() }
+    val scope = rememberCoroutineScope()
     var resizeMode by remember { mutableStateOf(ResizeMode.Fit) }
     var locked by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -194,6 +195,8 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
     var isPlaying by remember { mutableStateOf(false) }
     var showOptions by remember { mutableStateOf(false) }
     var gestureIndicator by remember { mutableStateOf<GestureIndicator?>(null) }
+    var vlcAudioChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-2, "Auto / current"))) }
+    var vlcSubtitleChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-1, "Off", off = true))) }
     val vlcLayout = remember { VLCVideoLayout(context) }
     val vlcOptions = remember {
         arrayListOf(
@@ -229,7 +232,11 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         vlcPlayer.attachViews(vlcLayout, null, false, false)
         vlcPlayer.setEventListener { event ->
             when (event.type) {
-                VlcMediaPlayer.Event.Playing -> isPlaying = true
+                VlcMediaPlayer.Event.Playing -> {
+                    isPlaying = true
+                    vlcAudioChoices = vlcPlayer.vlcAudioChoices()
+                    vlcSubtitleChoices = vlcPlayer.vlcSubtitleChoices()
+                }
                 VlcMediaPlayer.Event.Paused, VlcMediaPlayer.Event.Stopped, VlcMediaPlayer.Event.EndReached -> isPlaying = false
                 VlcMediaPlayer.Event.EncounteredError -> {
                     isPlaying = false
@@ -247,6 +254,8 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
             addOption(":network-caching=2500")
             addOption(":http-reconnect")
             addOption(":audio-time-stretch")
+            addOption(":codec=all")
+            addOption(":avcodec-fast")
         }
         vlcPlayer.media = media
         media.release()
@@ -276,6 +285,8 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
             position = runCatching { vlcPlayer.time.coerceAtLeast(0L) }.getOrDefault(0L)
             duration = runCatching { vlcPlayer.length.coerceAtLeast(0L) }.getOrDefault(0L)
             isPlaying = runCatching { vlcPlayer.isPlaying }.getOrDefault(isPlaying)
+            vlcAudioChoices = vlcPlayer.vlcAudioChoices()
+            vlcSubtitleChoices = vlcPlayer.vlcSubtitleChoices()
             delay(700)
         }
     }
@@ -367,9 +378,25 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         if (showOptions) {
             VlcVodOptionsDialog(
                 item = item,
+                settings = settings,
                 streamUrls = streamUrls,
                 urlIndex = urlIndex,
+                audioChoices = vlcAudioChoices,
+                subtitleChoices = vlcSubtitleChoices,
                 onDismiss = { showOptions = false },
+                onFavorite = { scope.launch { container.libraryRepository.toggleFavorite(session.accountKey, item) } },
+                onSettingsChange = { next -> scope.launch { container.sessionStore.updateSettings(next) } },
+                onAudioChoice = { choice ->
+                    runCatching {
+                        if (choice.off) vlcPlayer.setAudioTrack(-1) else if (choice.id >= 0) vlcPlayer.setAudioTrack(choice.id)
+                    }.onFailure { error = it.message }
+                },
+                onSubtitleChoice = { choice ->
+                    runCatching {
+                        if (choice.off) vlcPlayer.setSpuTrack(-1) else if (choice.id >= 0) vlcPlayer.setSpuTrack(choice.id)
+                    }.onFailure { error = it.message }
+                    scope.launch { container.sessionStore.updateSettings(settings.copy(subtitlesEnabled = !choice.off)) }
+                },
                 onSource = { next -> urlIndex = next; showOptions = false },
                 onOpenExternal = { runCatching { openExternalPlayer(context, streamUrl, item.title) }.onFailure { error = it.message } }
             )
@@ -380,28 +407,99 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
 @Composable
 private fun VlcVodOptionsDialog(
     item: ContentItem,
+    settings: AppSettings,
     streamUrls: List<String>,
     urlIndex: Int,
+    audioChoices: List<VlcTrackChoice>,
+    subtitleChoices: List<VlcTrackChoice>,
     onDismiss: () -> Unit,
+    onFavorite: () -> Unit,
+    onSettingsChange: (AppSettings) -> Unit,
+    onAudioChoice: (VlcTrackChoice) -> Unit,
+    onSubtitleChoice: (VlcTrackChoice) -> Unit,
     onSource: (Int) -> Unit,
     onOpenExternal: () -> Unit
 ) {
+    var section by remember { mutableStateOf(PlayerOptionsSection.Main) }
+    val title = when (section) {
+        PlayerOptionsSection.Main -> "Player options"
+        PlayerOptionsSection.Audio -> "Audio / dub"
+        PlayerOptionsSection.Subtitles -> "Subtitles"
+        PlayerOptionsSection.Quality -> "Quality / source"
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-        title = { Text("VOD player") },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (section != PlayerOptionsSection.Main) TextButton(onClick = { section = PlayerOptionsSection.Main }) { Text("Back") }
+                TextButton(onClick = onDismiss) { Text("Close") }
+            }
+        },
+        title = { Text(title) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, color = PremiumMuted)
-                Text("VOD uses the VLC playback engine for wider audio codec support.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                streamUrls.forEachIndexed { index, url ->
-                    OptionMenuRow(sourceLabel(url, index, index == urlIndex), if (index == urlIndex) "Current source" else "Switch source") { onSource(index) }
+                when (section) {
+                    PlayerOptionsSection.Main -> {
+                        OptionMenuRow("Audio / dub", "Choose audio track or dubbed language") { section = PlayerOptionsSection.Audio }
+                        OptionMenuRow("Subtitles", "Choose embedded subtitles") { section = PlayerOptionsSection.Subtitles }
+                        OptionMenuRow("Quality", "Choose Xtream source variant") { section = PlayerOptionsSection.Quality }
+                        OptionMenuRow("Add/remove favorite", "Save this movie or episode locally") { onFavorite() }
+                        Spacer(Modifier.height(4.dp))
+                        Button(onClick = onOpenExternal, modifier = Modifier.fillMaxWidth()) { Text("Open externally") }
+                    }
+                    PlayerOptionsSection.Audio -> {
+                        audioChoices.forEach { choice ->
+                            OptionMenuRow(choice.label, if (choice.off) "Disable audio" else "Use this audio track") { onAudioChoice(choice) }
+                        }
+                        if (audioChoices.size <= 1) Text("No separate audio/dub tracks were exposed by this VOD. The VLC engine still decodes wider audio formats such as AC3/EAC3/DTS when the device supports them.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                    }
+                    PlayerOptionsSection.Subtitles -> {
+                        subtitleChoices.forEach { choice ->
+                            OptionMenuRow(choice.label, if (choice.off) "Disable subtitles" else "Use this subtitle track") { onSubtitleChoice(choice) }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            androidx.compose.material3.Checkbox(checked = settings.subtitlesEnabled, onCheckedChange = { onSettingsChange(settings.copy(subtitlesEnabled = it)) })
+                            Text("Enable subtitles")
+                        }
+                    }
+                    PlayerOptionsSection.Quality -> {
+                        streamUrls.forEachIndexed { index, url ->
+                            OptionMenuRow(sourceLabel(url, index, index == urlIndex), if (index == urlIndex) "Current Xtream source" else "Switch source") { onSource(index) }
+                        }
+                        Text("For VOD, quality/source switching uses the available Xtream URL variants because most VOD files are direct files rather than adaptive live playlists.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                Button(onClick = onOpenExternal, modifier = Modifier.fillMaxWidth()) { Text("Open externally") }
             }
         }
     )
 }
+
+private data class VlcTrackChoice(val id: Int, val label: String, val off: Boolean = false)
+
+private fun VlcMediaPlayer.vlcAudioChoices(): List<VlcTrackChoice> {
+    val result = mutableListOf(VlcTrackChoice(-2, "Auto / current"))
+    runCatching {
+        audioTracks?.forEach { track ->
+            val name = track.name?.takeIf { it.isNotBlank() } ?: "Audio ${track.id}"
+            result += VlcTrackChoice(track.id, name)
+        }
+    }
+    return result.distinctBy { it.id }
+}
+
+private fun VlcMediaPlayer.vlcSubtitleChoices(): List<VlcTrackChoice> {
+    val result = mutableListOf(VlcTrackChoice(-1, "Off", off = true))
+    runCatching {
+        spuTracks?.forEach { track ->
+            val name = track.name?.takeIf { it.isNotBlank() } ?: "Subtitle ${track.id}"
+            result += VlcTrackChoice(track.id, name)
+        }
+    }
+    return result.distinctBy { it.id }
+}
+
 
 @Composable
 private fun InternalPlayerScreen(session: Session, container: AppContainer, item: ContentItem, settings: AppSettings, streamUrls: List<String>, onBack: () -> Unit) {

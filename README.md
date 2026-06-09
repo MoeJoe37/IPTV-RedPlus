@@ -11,7 +11,7 @@ RedPlus IPTV is a native Android IPTV player project for users who already have 
 - PPV / live event detection from event-related categories and channel names
 - Movies / VOD with categories, sorting, details, favorites, and resume support
 - Series / shows with seasons, episodes, favorites, and watch progress
-- AndroidX Media3 / ExoPlayer video player
+- AndroidX Media3 / ExoPlayer for Live TV and LibVLC for VOD/Series playback
 - Playback controls, resize modes, retry UI, reconnect behavior, and progress tracking
 - Basic EPG loading from Xtream short EPG when the provider supports it
 - Global search across Live TV, events, movies, and series
@@ -37,7 +37,7 @@ Android Studio is recommended for editing the project, but `BUILD.bat` can prepa
 2. Open the extracted `RedPlusIPTV` folder.
 3. Double-click `BUILD.bat`.
 4. On the first run, allow it to download Gradle and Android SDK packages.
-5. Wait for Gradle to clean and build the debug APK.
+5. Wait for Gradle to clean and build the release APK.
 6. The APK will be created at:
 
 ```text

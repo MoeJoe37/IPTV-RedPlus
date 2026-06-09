@@ -74,14 +74,14 @@ call gradlew.bat --no-daemon --no-watch-fs --console=plain clean
 if errorlevel 1 goto gradle_lock_help
 
 echo.
-echo [4/5] Building debug APK...
-call gradlew.bat --no-daemon --no-watch-fs --console=plain :app:assembleDebug
+echo [4/5] Building release APK...
+call gradlew.bat --no-daemon --no-watch-fs --console=plain :app:assembleRelease
 if errorlevel 1 goto build_failed
 
 echo.
 echo [5/5] Done.
 echo APK output:
-echo %cd%\app\build\outputs\apk\debug\app-debug.apk
+echo %cd%\app\build\outputs\apk\release\app-release.apk
 echo.
 echo Reuse note:
 echo Gradle and Android dependencies are cached under %REDPLUS_GRADLE_USER_HOME%.
