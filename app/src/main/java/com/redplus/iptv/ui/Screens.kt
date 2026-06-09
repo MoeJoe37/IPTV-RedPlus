@@ -239,7 +239,18 @@ fun LiveTvScreen(session: Session, container: AppContainer, navigate: (String) -
     val favs by container.libraryRepository.favoritesByType(session.accountKey, ContentType.LIVE).collectAsStateWithLifecycle(emptyList())
     val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
     val categoriesState by rememberLoadState(session.accountKey, refresh) { container.contentRepository.liveCategories(session, refresh > 0) }
-    val streamsState by rememberLoadState(session.accountKey, selectedCategory, refresh) { container.contentRepository.liveStreams(session, selectedCategory, refresh > 0) }
+    val rawLiveCategories = (categoriesState as? LoadState.Data<List<CategoryItem>>)?.value.orEmpty()
+    val rawLiveCategoryKey = rawLiveCategories.joinToString("|") { it.id }
+    val liveRealIds = realCategoryIds("live", rawLiveCategories, settings, selectedCategory)
+    val liveApiCategory = if (selectedCategory == "all" || selectedCategory.startsWith("group::")) null else selectedCategory
+    val streamsState by rememberLoadState(session.accountKey, selectedCategory, refresh, rawLiveCategoryKey, settings.hiddenCategoryKeys, settings.categoryGroupMap) {
+        val base = container.contentRepository.liveStreams(session, liveApiCategory, refresh > 0)
+        when {
+            selectedCategory == "all" -> base.filter { it.visibleForCategorySettings("live", settings) }
+            selectedCategory.startsWith("group::") -> base.filter { it.categoryId != null && it.categoryId in liveRealIds }
+            else -> base.filter { it.visibleForCategorySettings("live", settings) }
+        }
+    }
 
     ContentChrome("Live TV", onBack, onRefresh = { refresh++ }) {
         when {
@@ -247,11 +258,33 @@ fun LiveTvScreen(session: Session, container: AppContainer, navigate: (String) -
             streamsState is LoadState.Loading -> LoadingState("Loading channels...")
             streamsState is LoadState.Error -> ErrorState((streamsState as LoadState.Error).message, (streamsState as LoadState.Error).detail, { refresh++ }, onBack)
             categoriesState is LoadState.Data && streamsState is LoadState.Data -> {
-                val categories = listOf("all" to "All") + (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to repairText(it.name, settings.useUtf8Decode) }
+                val categoryOptions = managedCategories("live", (categoriesState as LoadState.Data<List<CategoryItem>>).value, settings, includeAll = true)
+                val categories = categoryOptions.map { it.id to repairText(it.name, settings.useUtf8Decode) }
+                if (categories.none { it.first == selectedCategory } && categories.isNotEmpty()) selectedCategory = categories.first().first
                 val streams = (streamsState as LoadState.Data<List<ContentItem>>).value.map { it.repairText(settings.useUtf8Decode) }.filter { query.isBlank() || it.title.containsNormalized(query) }
                 if (selected == null && streams.isNotEmpty()) selected = streams.first()
                 BoxWithConstraints(Modifier.fillMaxSize()) {
-                    if (maxWidth < 700.dp) {
+                    if (settings.tvViewMode) {
+                        TvContentList(
+                            categories = categories,
+                            selectedCategory = selectedCategory,
+                            onCategory = { selectedCategory = it; selected = null },
+                            query = query,
+                            onQuery = { query = it },
+                            placeholder = "Search channels",
+                            rows = streams,
+                            row = { item ->
+                                ChannelRow(
+                                    item = item,
+                                    selected = item.id == selected?.id,
+                                    favorite = favs.any { it.itemId == item.id },
+                                    onFavorite = { scope.launch { container.libraryRepository.toggleFavorite(session.accountKey, item) } },
+                                    onClick = { selected = item; play(item, navigate) },
+                                    onLongClick = { epg(item, navigate) }
+                                )
+                            }
+                        )
+                    } else if (maxWidth < 700.dp) {
                         PhoneContentList(
                             categories = categories,
                             selectedCategory = selectedCategory,
@@ -350,7 +383,8 @@ private fun CategoryStrip(categories: List<Pair<String, String>>, selected: Stri
 fun EventsScreen(session: Session, container: AppContainer, navigate: (String) -> Unit, onBack: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var refresh by remember { mutableIntStateOf(0) }
-    val state by rememberLoadState(session.accountKey, refresh) { container.contentRepository.eventStreams(session, refresh > 0) }
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
+    val state by rememberLoadState(session.accountKey, refresh, settings.hiddenCategoryKeys) { container.contentRepository.eventStreams(session, refresh > 0).filter { it.visibleForCategorySettings("live", settings) } }
     ContentChrome("PPV / Events", onBack, onRefresh = { refresh++ }) {
         when (state) {
             LoadState.Loading -> LoadingState("Detecting event channels...")
@@ -394,16 +428,30 @@ private fun CatalogScreen(title: String, session: Session, container: AppContain
     var refresh by remember { mutableIntStateOf(0) }
     val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
     val runtimeSection = settings.contentLoadingStrategy == ContentLoadingStrategy.RUNTIME && if (movies) settings.useRuntimeMovies else settings.useRuntimeSeries
-    val categoryToLoad = if (runtimeSection && selectedCategory == "all") "__empty__" else selectedCategory
+    val categoryKind = if (movies) "vod" else "series"
     val categoriesState by rememberLoadState(session.accountKey, movies, refresh) { if (movies) container.contentRepository.vodCategories(session, refresh > 0) else container.contentRepository.seriesCategories(session, refresh > 0) }
-    val itemsState by rememberLoadState(session.accountKey, movies, categoryToLoad, refresh) {
-        if (categoryToLoad == "__empty__") emptyList()
-        else if (movies) container.contentRepository.vodStreams(session, categoryToLoad, refresh > 0) else container.contentRepository.series(session, categoryToLoad, refresh > 0)
+    val rawCatalogCategories = (categoriesState as? LoadState.Data<List<CategoryItem>>)?.value.orEmpty()
+    val rawCatalogCategoryKey = rawCatalogCategories.joinToString("|") { it.id }
+    val catalogRealIds = realCategoryIds(categoryKind, rawCatalogCategories, settings, selectedCategory)
+    val catalogApiCategory = if (selectedCategory == "all" || selectedCategory.startsWith("group::")) null else selectedCategory
+    val skipRuntimeAll = runtimeSection && selectedCategory == "all"
+    val itemsState by rememberLoadState(session.accountKey, movies, selectedCategory, refresh, rawCatalogCategoryKey, settings.hiddenCategoryKeys, settings.categoryGroupMap) {
+        if (skipRuntimeAll) emptyList()
+        else {
+            val base = if (movies) container.contentRepository.vodStreams(session, catalogApiCategory, refresh > 0) else container.contentRepository.series(session, catalogApiCategory, refresh > 0)
+            when {
+                selectedCategory == "all" -> base.filter { it.visibleForCategorySettings(categoryKind, settings) }
+                selectedCategory.startsWith("group::") -> base.filter { it.categoryId != null && it.categoryId in catalogRealIds }
+                else -> base.filter { it.visibleForCategorySettings(categoryKind, settings) }
+            }
+        }
     }
-    LaunchedEffect(categoriesState, runtimeSection) {
-        if (runtimeSection && selectedCategory == "all" && categoriesState is LoadState.Data) {
-            val first = (categoriesState as LoadState.Data<List<CategoryItem>>).value.firstOrNull()?.id
-            if (!first.isNullOrBlank()) selectedCategory = first
+    LaunchedEffect(categoriesState, runtimeSection, settings.hiddenCategoryKeys, settings.categoryGroupMap) {
+        if (categoriesState is LoadState.Data) {
+            val options = managedCategories(categoryKind, (categoriesState as LoadState.Data<List<CategoryItem>>).value, settings, includeAll = !runtimeSection)
+            if ((runtimeSection && selectedCategory == "all") || options.none { it.id == selectedCategory }) {
+                options.firstOrNull()?.id?.let { selectedCategory = it }
+            }
         }
     }
 
@@ -413,8 +461,7 @@ private fun CatalogScreen(title: String, session: Session, container: AppContain
             categoriesState is LoadState.Error -> ErrorState((categoriesState as LoadState.Error).message, (categoriesState as LoadState.Error).detail, { refresh++ }, onBack)
             itemsState is LoadState.Error -> ErrorState((itemsState as LoadState.Error).message, (itemsState as LoadState.Error).detail, { refresh++ }, onBack)
             else -> {
-                val baseCategories = (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to repairText(it.name, settings.useUtf8Decode) }
-                val categories = if (runtimeSection) baseCategories else listOf("all" to "All") + baseCategories
+                val categories = managedCategories(categoryKind, (categoriesState as LoadState.Data<List<CategoryItem>>).value, settings, includeAll = !runtimeSection).map { it.id to repairText(it.name, settings.useUtf8Decode) }
                 var filtered = (itemsState as LoadState.Data<List<ContentItem>>).value.map { it.repairText(settings.useUtf8Decode) }.filter { query.isBlank() || it.title.containsNormalized(query) }
                 filtered = when (sort) {
                     "Year" -> filtered.sortedByDescending { it.year }
@@ -422,7 +469,20 @@ private fun CatalogScreen(title: String, session: Session, container: AppContain
                     else -> filtered.sortedBy { it.title }
                 }
                 BoxWithConstraints(Modifier.fillMaxSize()) {
-                    if (maxWidth < 700.dp) {
+                    if (settings.tvViewMode) {
+                        TvCatalogView(
+                            categories = categories,
+                            selectedCategory = selectedCategory,
+                            onCategory = { selectedCategory = it },
+                            query = query,
+                            onQuery = { query = it },
+                            title = title,
+                            sort = sort,
+                            onSort = { sort = it },
+                            items = filtered,
+                            onItemClick = { details(it, if (movies) Routes.MovieDetails else Routes.SeriesDetails, navigate) }
+                        )
+                    } else if (maxWidth < 700.dp) {
                         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             CategoryStrip(categories, selectedCategory) { selectedCategory = it }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -579,6 +639,7 @@ fun HistoryScreen(session: Session, container: AppContainer, navigate: (String) 
 fun GlobalSearchScreen(session: Session, container: AppContainer, navigate: (String) -> Unit, onBack: () -> Unit) {
     var query by remember { mutableStateOf("") }
     var debounced by remember { mutableStateOf("") }
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
     LaunchedEffect(query) { delay(350); debounced = query }
     val state by rememberLoadState(session.accountKey, debounced) {
         if (debounced.isBlank()) emptyList() else
@@ -595,7 +656,13 @@ fun GlobalSearchScreen(session: Session, container: AppContainer, navigate: (Str
                 LoadState.Loading -> LoadingState("Searching...")
                 is LoadState.Error -> ErrorState((state as LoadState.Error).message)
                 is LoadState.Data -> {
-                    val results = (state as LoadState.Data<List<ContentItem>>).value.filter { it.title.containsNormalized(debounced) }
+                    val results = (state as LoadState.Data<List<ContentItem>>).value.filter { it.title.containsNormalized(debounced) }.filter {
+                        when (it.type) {
+                            ContentType.LIVE, ContentType.EVENT -> it.visibleForCategorySettings("live", settings)
+                            ContentType.MOVIE -> it.visibleForCategorySettings("vod", settings)
+                            ContentType.SERIES, ContentType.EPISODE -> it.visibleForCategorySettings("series", settings)
+                        }
+                    }
                     LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                         items(results.take(200), key = { it.type.name + it.id }) { item ->
                             ChannelRow(item, false, onClick = {
@@ -658,7 +725,7 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
     ContentChrome("Settings", onBack) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             TabRow(selectedTabIndex = tab) {
-                listOf("Account", "Subtitles", "Player", "Runtimes").forEachIndexed { index, title ->
+                listOf("Account", "Subtitles", "Player", "Runtimes", "Categories").forEachIndexed { index, title ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
@@ -675,7 +742,7 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                                 Button(onClick = { scope.launch { container.authRepository.logout(); onLogout() } }, modifier = Modifier.fillMaxWidth()) { Text("Logout / Clear saved account") }
                             }
                         }
-                        item { Text("RedPlus IPTV v1.1.0 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
+                        item { Text("RedPlus IPTV v1.2.0 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
                     }
                     1 -> {
                         item {
@@ -697,13 +764,14 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                         item {
                             SettingsPanel("Playback") {
                                 SettingsCheckboxRow("Always start the whole app horizontally", settings.forceLandscapeApp) { save(settings.copy(forceLandscapeApp = it)) }
+                                SettingsCheckboxRow("TV view menus for channels and VOD", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
                                 SettingsCheckboxRow("Use external Live TV player", settings.useExternalLivePlayer) { save(settings.copy(useExternalLivePlayer = it)) }
                                 SettingsCheckboxRow("Use external VOD/Series player", settings.useExternalVodPlayer) { save(settings.copy(useExternalVodPlayer = it)) }
                                 Text("When external player is enabled, Android opens a player chooser for that stream type. Internal playback remains available by turning it off.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
-                    else -> {
+                    3 -> {
                         item {
                             SettingsPanel("Runtimes") {
                                 SettingsCheckboxRow("Stream URL redirection check", settings.streamUrlRedirectionCheck) { save(settings.copy(streamUrlRedirectionCheck = it)) }
@@ -725,10 +793,165 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                             }
                         }
                     }
+                    else -> {
+                        item {
+                            CategoryCustomizationPanel(session, container, settings, ::save)
+                        }
+                    }
                 }
             }
         }
     }
+}
+
+
+@Composable
+private fun TvContentList(
+    categories: List<Pair<String, String>>,
+    selectedCategory: String,
+    onCategory: (String) -> Unit,
+    query: String,
+    onQuery: (String) -> Unit,
+    placeholder: String,
+    rows: List<ContentItem>,
+    row: @Composable (ContentItem) -> Unit
+) {
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GlassPanel(Modifier.width(132.dp).fillMaxSize()) {
+            CategorySidebar(categories, selectedCategory, onCategory, Modifier.fillMaxSize())
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SearchBox(query, onQuery, Modifier.fillMaxWidth(), placeholder)
+            Text("TV view • ${rows.size} item(s)", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 18.dp)) {
+                items(rows, key = { it.type.name + it.id }) { item -> row(item) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TvCatalogView(
+    categories: List<Pair<String, String>>,
+    selectedCategory: String,
+    onCategory: (String) -> Unit,
+    query: String,
+    onQuery: (String) -> Unit,
+    title: String,
+    sort: String,
+    onSort: (String) -> Unit,
+    items: List<ContentItem>,
+    onItemClick: (ContentItem) -> Unit
+) {
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GlassPanel(Modifier.width(132.dp).fillMaxSize()) {
+            CategorySidebar(categories, selectedCategory, onCategory, Modifier.fillMaxSize())
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SearchBox(query, onQuery, Modifier.weight(1f), "Search $title")
+                SortButton(sort, onSort)
+            }
+            Text("TV view • ${items.size} item(s)", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+            PosterGrid(items, onClick = onItemClick, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun CategoryCustomizationPanel(session: Session, container: AppContainer, settings: AppSettings, save: (AppSettings) -> Unit) {
+    var query by remember { mutableStateOf("") }
+    val state by rememberLoadState(session.accountKey, "category-customization") {
+        listOf(
+            CategorySection("live", "Live TV", container.contentRepository.liveCategories(session)),
+            CategorySection("vod", "Movies / VOD", container.contentRepository.vodCategories(session)),
+            CategorySection("series", "Series / Shows", container.contentRepository.seriesCategories(session))
+        )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SettingsPanel("Category customization") {
+            SettingsCheckboxRow("Use TV-style see-through menus", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
+            SearchBox(query, { query = it }, Modifier.fillMaxWidth(), "Search categories")
+            Text("Hide categories you do not want to see, or type the same group name on several categories to merge them into one menu chip.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+        }
+        when (state) {
+            LoadState.Loading -> LoadingState("Loading categories...")
+            is LoadState.Error -> ErrorState((state as LoadState.Error).message, (state as LoadState.Error).detail)
+            is LoadState.Data -> {
+                (state as LoadState.Data<List<CategorySection>>).value.forEach { section ->
+                    val rows = section.categories.filter { query.isBlank() || it.name.containsNormalized(query) }
+                    SettingsPanel("${section.title} categories") {
+                        if (rows.isEmpty()) Text("No categories matched.", color = PremiumMuted)
+                        rows.take(120).forEach { category ->
+                            CategoryCustomizationRow(section.kind, category, settings, save)
+                        }
+                        if (rows.size > 120) Text("Showing first 120 matches. Use search to narrow the list.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryCustomizationRow(kind: String, category: CategoryItem, settings: AppSettings, save: (AppSettings) -> Unit) {
+    val key = categoryKey(kind, category.id)
+    val hidden = key in settings.hiddenCategoryKeys
+    val groupName = settings.categoryGroupMap[key].orEmpty()
+    GlassPanel(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = hidden,
+                    onCheckedChange = { checked ->
+                        val nextHidden = if (checked) settings.hiddenCategoryKeys + key else settings.hiddenCategoryKeys - key
+                        save(settings.copy(hiddenCategoryKeys = nextHidden))
+                    }
+                )
+                Column(Modifier.weight(1f)) {
+                    Text(repairText(category.name, settings.useUtf8Decode), maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                    Text(if (hidden) "Hidden" else "Visible", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            OutlinedTextField(
+                value = groupName,
+                onValueChange = { value ->
+                    val clean = value.trim()
+                    val nextMap = if (clean.isBlank()) settings.categoryGroupMap - key else settings.categoryGroupMap + (key to clean)
+                    save(settings.copy(categoryGroupMap = nextMap))
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Group name, optional") }
+            )
+        }
+    }
+}
+
+private data class CategorySection(val kind: String, val title: String, val categories: List<CategoryItem>)
+private data class ManagedCategoryOption(val id: String, val name: String, val realIds: Set<String>)
+
+private fun categoryKey(kind: String, id: String): String = "$kind:$id"
+private fun groupId(kind: String, name: String): String = "group::$kind::$name"
+
+private fun managedCategories(kind: String, raw: List<CategoryItem>, settings: AppSettings, includeAll: Boolean): List<ManagedCategoryOption> {
+    val visible = raw.filter { categoryKey(kind, it.id) !in settings.hiddenCategoryKeys }
+    val grouped = visible.groupBy { settings.categoryGroupMap[categoryKey(kind, it.id)]?.trim()?.takeIf { name -> name.isNotBlank() } }
+    val result = mutableListOf<ManagedCategoryOption>()
+    if (includeAll) result += ManagedCategoryOption("all", "All", visible.map { it.id }.toSet())
+    grouped[null].orEmpty().forEach { category -> result += ManagedCategoryOption(category.id, category.name, setOf(category.id)) }
+    grouped.filterKeys { it != null }.entries.sortedBy { it.key.orEmpty() }.forEach { entry ->
+        val groupName = entry.key ?: return@forEach
+        result += ManagedCategoryOption(groupId(kind, groupName), "Group: $groupName", entry.value.map { it.id }.toSet())
+    }
+    return result
+}
+
+private fun realCategoryIds(kind: String, raw: List<CategoryItem>, settings: AppSettings, selected: String): Set<String> = managedCategories(kind, raw, settings, includeAll = true).firstOrNull { it.id == selected }?.realIds.orEmpty()
+
+private fun ContentItem.visibleForCategorySettings(kind: String, settings: AppSettings): Boolean {
+    val category = categoryId ?: return true
+    return categoryKey(kind, category) !in settings.hiddenCategoryKeys
 }
 
 @Composable

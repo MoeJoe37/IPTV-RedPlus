@@ -15,7 +15,10 @@ data class AppSettings(
     val contentLoadingStrategy: ContentLoadingStrategy = ContentLoadingStrategy.RUNTIME,
     val useExternalLivePlayer: Boolean = false,
     val useExternalVodPlayer: Boolean = false,
-    val externalXmlTvUrl: String = ""
+    val externalXmlTvUrl: String = "",
+    val tvViewMode: Boolean = false,
+    val hiddenCategoryKeys: Set<String> = emptySet(),
+    val categoryGroupMap: Map<String, String> = emptyMap()
 )
 
 enum class ContentLoadingStrategy(val label: String) {

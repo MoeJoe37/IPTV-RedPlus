@@ -164,3 +164,40 @@ This build adds the requested player/runtime controls:
 - EPG timeline now uses the provider Xtream EPG first. You can optionally enter a legal XMLTV EPG feed URL in Settings > Runtimes; the app will try to match channel names/EPG IDs and show the schedule in the player and EPG screen.
 
 No IPTV links, playlists, channels, or copyrighted content are included in this project. Users must provide their own legal Xtream account and, if used, their own legal XMLTV EPG URL.
+
+## Version 1.2.0 phone/player UX update
+
+This build adds the requested phone/player refinements:
+
+- Normal browsing screens no longer run edge-to-edge; the Android status bar and navigation bar stay visible outside playback.
+- The player is the only full-screen area and hides system bars while watching.
+- Leaving the player now restores portrait/normal orientation unless **Always start the whole app horizontally** is enabled.
+- Media3's built-in controller is disabled so there is no duplicate control system.
+- Player controls are consolidated into the three-dot menu.
+- The rotate button remains outside the menu as a separate hollow square button.
+- Added adaptive video quality selection when HLS/video tracks expose multiple qualities.
+- Added source switching between generated Xtream stream URL variants such as HLS/m3u8, TS, MP4/default when available.
+- Volume and brightness gestures now show an on-screen percentage bar.
+- Settings include TV-view mode for see-through black side menus.
+- Settings include category customization: hide categories or assign the same group name to multiple categories to merge them into one menu entry.
+
+
+
+## Build cache update
+
+`BUILD.bat` now uses one persistent cache for all RedPlus IPTV builds instead of a cache inside each extracted ZIP folder. The cache is stored at:
+
+```text
+%USERPROFILE%\.redplus-iptv\gradle-cache
+```
+
+On first run, Gradle and Android dependencies may download. Future builds should reuse this same cache. The script also saves these environment variables. It writes USER env without admin rights, and also writes SYSTEM env when BUILD.bat is run as Administrator:
+
+```text
+REDPLUS_GRADLE_USER_HOME
+ANDROID_HOME
+ANDROID_SDK_ROOT
+REDPLUS_ANDROID_SDK_ROOT
+```
+
+If you want to force a full dependency redownload, close Android Studio/Java/Gradle and delete `%USERPROFILE%\.redplus-iptv\gradle-cache`.

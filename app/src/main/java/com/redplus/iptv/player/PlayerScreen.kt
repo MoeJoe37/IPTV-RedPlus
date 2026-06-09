@@ -7,14 +7,18 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.net.Uri
+import android.view.WindowManager
 import androidx.annotation.OptIn
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,9 +26,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.CropLandscape
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -50,12 +65,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
@@ -75,11 +94,13 @@ import com.redplus.iptv.ui.ErrorState
 import com.redplus.iptv.ui.GlassPanel
 import com.redplus.iptv.ui.LoadingState
 import com.redplus.iptv.ui.theme.PremiumMuted
+import com.redplus.iptv.ui.theme.PremiumPanel
 import com.redplus.iptv.ui.theme.PremiumRed
 import com.redplus.iptv.util.msToTime
 import com.redplus.iptv.util.unixToLocalTime
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -154,6 +175,7 @@ private fun ExternalPlayerLauncher(item: ContentItem, url: String, onBack: () ->
 @Composable
 private fun InternalPlayerScreen(session: Session, container: AppContainer, item: ContentItem, settings: AppSettings, streamUrls: List<String>, onBack: () -> Unit) {
     val context = LocalContext.current
+    val activity = context as? Activity
     var urlIndex by remember(streamUrls) { mutableIntStateOf(0) }
     val streamUrl = streamUrls.getOrElse(urlIndex) { streamUrls.first() }
     val scope = rememberCoroutineScope()
@@ -165,9 +187,24 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
     var overlay by remember { mutableStateOf(true) }
     var brightness by remember { mutableFloatStateOf(-1f) }
     var showOptions by remember { mutableStateOf(false) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var gestureIndicator by remember { mutableStateOf<GestureIndicator?>(null) }
     var subtitleChoices by remember { mutableStateOf(listOf(SubtitleChoice("auto", "Auto", false), SubtitleChoice("off", "Off", true))) }
+    var videoChoices by remember { mutableStateOf(listOf(VideoChoice("auto", "Auto"))) }
     val timelineState by produceState<List<EpgProgram>>(initialValue = emptyList(), session.accountKey, item.id, settings.liveTvEpg, settings.externalXmlTvUrl) {
         value = runCatching { container.contentRepository.timeline(session, item, settings, 6) }.getOrDefault(emptyList())
+    }
+
+    DisposableEffect(activity, settings.forceLandscapeApp) {
+        activity?.enterPlayerFullscreen()
+        onDispose {
+            activity?.exitPlayerFullscreen(settings.forceLandscapeApp)
+            activity?.window?.let { window ->
+                val attrs = window.attributes
+                attrs.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                window.attributes = attrs
+            }
+        }
     }
 
     val mediaItem = remember(streamUrl, settings.externalSubtitleUrl, settings.preferredSubtitleLanguage, settings.subtitlesEnabled) {
@@ -176,7 +213,7 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
 
     val player = remember(streamUrl, mediaItem) {
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("RedPlusIPTV/1.1")
+            .setUserAgent("RedPlusIPTV/1.2")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(30_000)
@@ -191,11 +228,11 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
             }
     }
 
-    DisposableEffect(player) {
+    DisposableEffect(player, streamUrls, urlIndex) {
         val listener = object : Player.Listener {
             override fun onPlayerError(playbackException: PlaybackException) {
                 if (urlIndex < streamUrls.lastIndex) {
-                    error = "Stream failed. Trying alternate format ${urlIndex + 2}/${streamUrls.size}..."
+                    error = "Stream failed. Trying alternate source ${urlIndex + 2}/${streamUrls.size}..."
                     urlIndex += 1
                 } else {
                     error = playbackException.message ?: "Playback error. Check that your provider supports this stream."
@@ -204,10 +241,17 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
 
             override fun onTracksChanged(tracks: Tracks) {
                 subtitleChoices = player.subtitleChoices()
+                videoChoices = player.videoChoices(streamUrls, urlIndex)
+            }
+
+            override fun onIsPlayingChanged(value: Boolean) {
+                isPlaying = value
             }
         }
         player.addListener(listener)
+        isPlaying = player.isPlaying
         subtitleChoices = player.subtitleChoices()
+        videoChoices = player.videoChoices(streamUrls, urlIndex)
         onDispose {
             val lastPosition = player.currentPosition.coerceAtLeast(0L)
             val rawDuration = player.duration
@@ -239,13 +283,20 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
         }
     }
 
+    LaunchedEffect(gestureIndicator) {
+        if (gestureIndicator != null) {
+            delay(900)
+            gestureIndicator = null
+        }
+    }
+
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             .pointerInput(locked) {
                 detectTapGestures(
-                    onTap = { if (!locked) overlay = !overlay },
+                    onTap = { overlay = !overlay },
                     onDoubleTap = { offset ->
                         if (!locked && player.isCurrentMediaItemSeekable) {
                             if (offset.x < size.width / 2) player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
@@ -259,16 +310,21 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
                     if (locked) return@detectVerticalDragGestures
                     val isLeft = change.position.x < size.width / 2
                     if (isLeft) {
-                        val activity = context as? Activity
                         val current = if (brightness >= 0f) brightness else (activity?.window?.attributes?.screenBrightness ?: 0.5f).let { if (it < 0f) 0.5f else it }
                         brightness = (current - dragAmount / 900f).coerceIn(0.05f, 1f)
-                        activity?.window?.attributes = activity?.window?.attributes?.apply { screenBrightness = brightness }
+                        activity?.window?.let { window ->
+                            val attrs = window.attributes
+                            attrs.screenBrightness = brightness
+                            window.attributes = attrs
+                        }
+                        gestureIndicator = GestureIndicator("Brightness", brightness)
                     } else {
                         val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
                         val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-                        val next = (cur - dragAmount / 90f).toInt().coerceIn(0, max)
+                        val next = (cur - dragAmount / 90f).roundToInt().coerceIn(0, max)
                         audio.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
+                        gestureIndicator = GestureIndicator("Volume", next.toFloat() / max.toFloat())
                     }
                 }
             }
@@ -277,7 +333,7 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
             factory = { ctx ->
                 PlayerView(ctx).apply {
                     keepScreenOn = true
-                    useController = true
+                    useController = false
                     this.player = player
                     this.resizeMode = resizeMode.media3
                 }
@@ -285,23 +341,23 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
             update = { view ->
                 view.player = player
                 view.resizeMode = resizeMode.media3
-                view.useController = !locked
+                view.useController = false
             },
             modifier = Modifier.fillMaxSize()
         )
 
         if (overlay) {
-            PlayerOverlay(
+            MinimalPlayerOverlay(
                 item = item,
                 position = position,
                 duration = duration,
                 resizeMode = resizeMode,
-                locked = locked,
-                error = error,
                 urlIndex = urlIndex,
                 urlCount = streamUrls.size,
                 timeline = timelineState,
-                onBack = onBack,
+                error = error,
+                onOptions = { showOptions = true },
+                onRotate = { toggleLandscape(context) },
                 onRetry = {
                     error = null
                     if (urlIndex < streamUrls.lastIndex) urlIndex += 1 else {
@@ -309,101 +365,75 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
                         player.prepare()
                         player.playWhenReady = true
                     }
-                },
-                onResize = { resizeMode = resizeMode.next() },
-                onLock = { locked = !locked },
-                onFavorite = { scope.launch { container.libraryRepository.toggleFavorite(session.accountKey, item) } },
-                onSeek = { player.seekTo(it) },
-                onOptions = { showOptions = true },
-                onRotate = { toggleLandscape(context) }
+                }
             )
         }
+
+        gestureIndicator?.let { GestureIndicatorView(it, Modifier.align(Alignment.Center)) }
 
         if (showOptions) {
             PlayerOptionsDialog(
                 item = item,
                 settings = settings,
+                isPlaying = isPlaying,
+                position = position,
+                duration = duration,
+                resizeMode = resizeMode,
+                locked = locked,
+                videoChoices = videoChoices,
                 subtitleChoices = subtitleChoices,
                 onDismiss = { showOptions = false },
+                onBack = { showOptions = false; onBack() },
+                onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                onSeekBy = { by -> if (player.isCurrentMediaItemSeekable) player.seekTo((player.currentPosition + by).coerceAtLeast(0L)) },
+                onSeek = { player.seekTo(it) },
+                onResize = { resizeMode = resizeMode.next() },
+                onLock = { locked = !locked },
+                onFavorite = { scope.launch { container.libraryRepository.toggleFavorite(session.accountKey, item) } },
                 onSettingsChange = { next -> scope.launch { container.sessionStore.updateSettings(next) } },
                 onSubtitleChoice = { choice ->
                     player.applySubtitleChoice(choice)
-                    scope.launch {
-                        container.sessionStore.updateSettings(settings.copy(subtitlesEnabled = !choice.off, preferredSubtitleLanguage = choice.language))
+                    scope.launch { container.sessionStore.updateSettings(settings.copy(subtitlesEnabled = !choice.off, preferredSubtitleLanguage = choice.language)) }
+                },
+                onVideoChoice = { choice ->
+                    if (choice.sourceIndex != null) {
+                        urlIndex = choice.sourceIndex
+                    } else {
+                        player.applyVideoChoice(choice)
                     }
                 },
-                onOpenExternal = { runCatching { openExternalPlayer(context, streamUrl, item.title) }.onFailure { error = it.message } },
-                onRotate = { toggleLandscape(context) }
+                onOpenExternal = { runCatching { openExternalPlayer(context, streamUrl, item.title) }.onFailure { error = it.message } }
             )
         }
     }
 }
 
 @Composable
-private fun PlayerOverlay(
+private fun MinimalPlayerOverlay(
     item: ContentItem,
     position: Long,
     duration: Long,
     resizeMode: ResizeMode,
-    locked: Boolean,
-    error: String?,
     urlIndex: Int,
     urlCount: Int,
     timeline: List<EpgProgram>,
-    onBack: () -> Unit,
-    onRetry: () -> Unit,
-    onResize: () -> Unit,
-    onLock: () -> Unit,
-    onFavorite: () -> Unit,
-    onSeek: (Long) -> Unit,
+    error: String?,
     onOptions: () -> Unit,
-    onRotate: () -> Unit
+    onRotate: () -> Unit,
+    onRetry: () -> Unit
 ) {
-    Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.SpaceBetween) {
-        GlassPanel(Modifier.fillMaxWidth()) {
-            BoxWithConstraints(Modifier.fillMaxWidth().padding(8.dp)) {
-                if (maxWidth < 620.dp) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            TextButton(onClick = onBack) { Text("Back") }
-                            Column(Modifier.weight(1f)) {
-                                Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(playbackSubtitle(item, position, duration, urlIndex, urlCount), color = PremiumMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1)
-                            }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            AssistChip(onClick = onResize, label = { Text(resizeMode.label) })
-                            AssistChip(onClick = onOptions, label = { Text("Options") })
-                            AssistChip(onClick = onRotate, label = { Text("Rotate") })
-                            AssistChip(onClick = onFavorite, label = { Text("Fav") })
-                            AssistChip(onClick = onLock, label = { Text(if (locked) "Unlock" else "Lock") })
-                        }
-                    }
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onBack) { Text("Back") }
-                        Column(Modifier.weight(1f)) {
-                            Text(item.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(playbackSubtitle(item, position, duration, urlIndex, urlCount), color = PremiumMuted)
-                        }
-                        AssistChip(onClick = onResize, label = { Text(resizeMode.label) })
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = onOptions) { Text("Options") }
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = onRotate) { Text("Rotate") }
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = onFavorite) { Text("Favorite") }
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = onLock) { Text(if (locked) "Unlock" else "Lock") }
-                    }
-                }
+    Box(Modifier.fillMaxSize().padding(10.dp)) {
+        GlassPanel(Modifier.align(Alignment.TopStart).fillMaxWidth(.78f)) {
+            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(playbackSubtitle(item, position, duration, urlIndex, urlCount, resizeMode), color = PremiumMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
         }
 
         if (timeline.isNotEmpty()) {
-            GlassPanel(Modifier.fillMaxWidth()) {
+            GlassPanel(Modifier.align(Alignment.BottomStart).fillMaxWidth(.72f)) {
                 Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Channel schedule", color = PremiumRed, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                    Text("Schedule", color = PremiumRed, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                     timeline.take(2).forEach { program ->
                         Text("${program.timeText()}  ${program.title}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
                     }
@@ -412,60 +442,112 @@ private fun PlayerOverlay(
         }
 
         if (error != null) {
-            GlassPanel(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f), maxLines = 3, overflow = TextOverflow.Ellipsis)
+            GlassPanel(Modifier.align(Alignment.Center).fillMaxWidth(.92f)) {
+                Column(Modifier.padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(error, color = MaterialTheme.colorScheme.error, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     Button(onClick = onRetry) { Text("Retry") }
                 }
             }
         }
 
-        if (duration > 0 && item.type != ContentType.LIVE && item.type != ContentType.EVENT) {
-            GlassPanel(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(10.dp)) {
-                    Slider(value = position.toFloat().coerceIn(0f, duration.toFloat()), onValueChange = { onSeek(it.toLong()) }, valueRange = 0f..duration.toFloat())
-                    Text("Double tap to seek. Swipe left/right side for brightness/volume.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        } else {
-            GlassPanel(Modifier.fillMaxWidth()) {
-                Text("Tap to show/hide controls. Options includes subtitle selection and external player.", Modifier.padding(10.dp), color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-            }
+        Row(
+            modifier = Modifier.align(Alignment.BottomEnd),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = onRotate,
+                modifier = Modifier.border(BorderStroke(1.4.dp, Color.White.copy(alpha = .78f)), RoundedCornerShape(12.dp)).background(Color.Black.copy(alpha = .36f), RoundedCornerShape(12.dp))
+            ) { Icon(Icons.Outlined.CropLandscape, contentDescription = "Rotate", tint = Color.White) }
+            IconButton(
+                onClick = onOptions,
+                modifier = Modifier.background(Color.Black.copy(alpha = .46f), RoundedCornerShape(12.dp))
+            ) { Icon(Icons.Outlined.MoreVert, contentDescription = "Options", tint = Color.White) }
         }
     }
 }
 
 @Composable
+private fun GestureIndicatorView(indicator: GestureIndicator, modifier: Modifier = Modifier) {
+    GlassPanel(modifier.width(220.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(indicator.label, fontWeight = FontWeight.Bold)
+            LinearProgressIndicator(progress = indicator.value.coerceIn(0f, 1f), modifier = Modifier.fillMaxWidth())
+            Text("${(indicator.value.coerceIn(0f, 1f) * 100).roundToInt()}%", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+@kotlin.OptIn(ExperimentalLayoutApi::class)
+@Composable
 private fun PlayerOptionsDialog(
     item: ContentItem,
     settings: AppSettings,
+    isPlaying: Boolean,
+    position: Long,
+    duration: Long,
+    resizeMode: ResizeMode,
+    locked: Boolean,
+    videoChoices: List<VideoChoice>,
     subtitleChoices: List<SubtitleChoice>,
     onDismiss: () -> Unit,
+    onBack: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeekBy: (Long) -> Unit,
+    onSeek: (Long) -> Unit,
+    onResize: () -> Unit,
+    onLock: () -> Unit,
+    onFavorite: () -> Unit,
     onSettingsChange: (AppSettings) -> Unit,
     onSubtitleChoice: (SubtitleChoice) -> Unit,
-    onOpenExternal: () -> Unit,
-    onRotate: () -> Unit
+    onVideoChoice: (VideoChoice) -> Unit,
+    onOpenExternal: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
         title = { Text("Player options") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, color = PremiumMuted)
+
+                Text("Playback", fontWeight = FontWeight.Bold)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AssistChip(onClick = onPlayPause, label = { Text(if (isPlaying) "Pause" else "Play") }, leadingIcon = { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) })
+                    AssistChip(onClick = { onSeekBy(-10_000L) }, label = { Text("-10s") })
+                    AssistChip(onClick = { onSeekBy(10_000L) }, label = { Text("+10s") })
+                    AssistChip(onClick = onBack, label = { Text("Back") })
+                }
+                if (duration > 0 && item.type != ContentType.LIVE && item.type != ContentType.EVENT) {
+                    Slider(value = position.toFloat().coerceIn(0f, duration.toFloat()), onValueChange = { onSeek(it.toLong()) }, valueRange = 0f..duration.toFloat())
+                    Text("${msToTime(position)} / ${msToTime(duration)}", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                }
+
+                Text("Quality / Source", fontWeight = FontWeight.Bold)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    videoChoices.take(10).forEach { choice ->
+                        AssistChip(onClick = { onVideoChoice(choice) }, label = { Text(choice.label, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                    }
+                }
+                Text("Auto uses adaptive HLS quality when available. Source buttons switch between Xtream URL variants such as HLS/TS/MP4.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+
                 Text("Subtitles", fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    subtitleChoices.take(4).forEach { choice -> AssistChip(onClick = { onSubtitleChoice(choice) }, label = { Text(choice.label, maxLines = 1, overflow = TextOverflow.Ellipsis) }) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    subtitleChoices.take(10).forEach { choice ->
+                        AssistChip(onClick = { onSubtitleChoice(choice) }, label = { Text(choice.label, maxLines = 1, overflow = TextOverflow.Ellipsis) })
+                    }
                 }
-                Text("Default: ${settings.preferredSubtitleLanguage}", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                Text("Screen", fontWeight = FontWeight.Bold)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = onRotate, label = { Text("Turn sideways") })
-                    AssistChip(onClick = onOpenExternal, label = { Text("Open externally") })
-                }
-                Text("This ${if (item.type == ContentType.LIVE || item.type == ContentType.EVENT) "live" else "VOD"} item uses the matching internal/external player setting.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     androidx.compose.material3.Checkbox(checked = settings.subtitlesEnabled, onCheckedChange = { onSettingsChange(settings.copy(subtitlesEnabled = it)) })
                     Text("Enable embedded/external subtitles")
+                }
+
+                Text("Screen and actions", fontWeight = FontWeight.Bold)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    AssistChip(onClick = onResize, label = { Text("Resize: ${resizeMode.label}") })
+                    AssistChip(onClick = onFavorite, label = { Text("Favorite") })
+                    AssistChip(onClick = onLock, label = { Text(if (locked) "Unlock controls" else "Lock controls") })
+                    AssistChip(onClick = onOpenExternal, label = { Text("Open externally") })
                 }
             }
         }
@@ -504,7 +586,21 @@ private fun Player.applySubtitleSettings(settings: AppSettings) {
 private fun Player.applySubtitleChoice(choice: SubtitleChoice) {
     val builder: TrackSelectionParameters.Builder = trackSelectionParameters.buildUpon()
         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, choice.off)
+        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
     if (!choice.off && choice.language != "auto") builder.setPreferredTextLanguage(choice.language)
+    trackSelectionParameters = builder.build()
+}
+
+@OptIn(UnstableApi::class)
+private fun Player.applyVideoChoice(choice: VideoChoice) {
+    val builder = trackSelectionParameters.buildUpon()
+        .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+        .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+    val group = choice.trackGroup
+    val index = choice.trackIndex
+    if (group != null && index != null) {
+        builder.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, listOf(index)))
+    }
     trackSelectionParameters = builder.build()
 }
 
@@ -525,11 +621,60 @@ private fun Player.subtitleChoices(): List<SubtitleChoice> {
     return result.values.toList()
 }
 
+@OptIn(UnstableApi::class)
+private fun Player.videoChoices(streamUrls: List<String>, urlIndex: Int): List<VideoChoice> {
+    val result = mutableListOf(VideoChoice("auto", "Auto"))
+    if (streamUrls.size > 1) {
+        streamUrls.forEachIndexed { index, url ->
+            result += VideoChoice("source_$index", sourceLabel(url, index, index == urlIndex), sourceIndex = index)
+        }
+    }
+    currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }.forEachIndexed { groupIndex, group ->
+        for (i in 0 until group.length) {
+            if (group.isTrackSupported(i)) {
+                val format = group.getTrackFormat(i)
+                val resolution = when {
+                    format.height > 0 -> "${format.height}p"
+                    format.width > 0 -> "${format.width}w"
+                    !format.label.isNullOrBlank() -> format.label!!
+                    else -> "Video ${result.size}"
+                }
+                val bitrate = if (format.bitrate > 0) " • ${format.bitrate / 1000} kbps" else ""
+                result += VideoChoice("track_${groupIndex}_$i", "$resolution$bitrate", group, i)
+            }
+        }
+    }
+    return result.distinctBy { it.id }
+}
+
+private fun sourceLabel(url: String, index: Int, selected: Boolean): String {
+    val lower = url.lowercase()
+    val type = when {
+        ".m3u8" in lower -> "HLS/m3u8"
+        ".ts" in lower -> "TS"
+        ".mp4" in lower -> "MP4"
+        else -> "Default"
+    }
+    return "Source ${index + 1} • $type${if (selected) " ✓" else ""}"
+}
+
 private data class SubtitleChoice(val language: String, val label: String, val off: Boolean)
 
-private fun playbackSubtitle(item: ContentItem, position: Long, duration: Long, urlIndex: Int, urlCount: Int): String {
-    val stream = if (urlCount > 1) " • Source ${urlIndex + 1}/$urlCount" else ""
-    return if (item.type == ContentType.LIVE || item.type == ContentType.EVENT) "Live playback$stream" else "${msToTime(position)} / ${msToTime(duration)}$stream"
+@OptIn(UnstableApi::class)
+private data class VideoChoice(
+    val id: String,
+    val label: String,
+    val trackGroup: Tracks.Group? = null,
+    val trackIndex: Int? = null,
+    val sourceIndex: Int? = null
+)
+
+private data class GestureIndicator(val label: String, val value: Float)
+
+private fun playbackSubtitle(item: ContentItem, position: Long, duration: Long, urlIndex: Int, urlCount: Int, resizeMode: ResizeMode): String {
+    val source = if (urlCount > 1) " • Source ${urlIndex + 1}/$urlCount" else ""
+    val mode = " • ${resizeMode.label}"
+    return if (item.type == ContentType.LIVE || item.type == ContentType.EVENT) "Live playback$source$mode" else "${msToTime(position)} / ${msToTime(duration)}$source$mode"
 }
 
 private fun EpgProgram.timeText(): String {
@@ -553,6 +698,20 @@ private fun toggleLandscape(context: Context) {
     } else {
         ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
+}
+
+private fun Activity.enterPlayerFullscreen() {
+    WindowCompat.setDecorFitsSystemWindows(window, false)
+    WindowInsetsControllerCompat(window, window.decorView).apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        hide(WindowInsetsCompat.Type.systemBars())
+    }
+}
+
+private fun Activity.exitPlayerFullscreen(forceLandscapeApp: Boolean) {
+    WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())
+    WindowCompat.setDecorFitsSystemWindows(window, true)
+    requestedOrientation = if (forceLandscapeApp) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
 }
 
 private enum class ResizeMode(val label: String, val media3: Int) {

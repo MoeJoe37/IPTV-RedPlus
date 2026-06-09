@@ -154,6 +154,39 @@ function Invoke-SdkManagerWithYes([string]$sdkManager, [string[]]$arguments, [st
     }
 }
 
+
+function Test-IsAdmin {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Save-EnvironmentVariable([string]$name, [string]$value) {
+    try {
+        [Environment]::SetEnvironmentVariable($name, $value, 'User')
+        Write-Host "Saved USER env: $name=$value"
+        if (Test-IsAdmin) {
+            [Environment]::SetEnvironmentVariable($name, $value, 'Machine')
+            Write-Host "Saved SYSTEM env: $name=$value"
+        } else {
+            Write-Host "SYSTEM env for $name was not changed because BUILD.bat is not running as Administrator. USER env is enough for this build."
+        }
+    } catch {
+        Write-Host "Could not save environment variable ${name}: $($_.Exception.Message)"
+    }
+}
+
+function Write-UserEnvironmentVariables([string]$sdkRoot) {
+    Save-EnvironmentVariable 'ANDROID_HOME' $sdkRoot
+    Save-EnvironmentVariable 'ANDROID_SDK_ROOT' $sdkRoot
+    Save-EnvironmentVariable 'REDPLUS_ANDROID_SDK_ROOT' $sdkRoot
+    Write-Host 'New Command Prompt/PowerShell windows will see the saved variables. This build uses local.properties immediately.'
+}
+
 function Write-LocalProperties([string]$sdkRoot) {
     $localProperties = Join-Path $root 'local.properties'
     $escaped = $sdkRoot.Replace('\', '/')
@@ -193,6 +226,7 @@ if (-not (Test-SdkReady $sdkRoot)) {
 }
 
 Write-LocalProperties $sdkRoot
+Write-UserEnvironmentVariables $sdkRoot
 
 Write-Section 'Android SDK ready'
 Write-Host "SDK root: $sdkRoot"

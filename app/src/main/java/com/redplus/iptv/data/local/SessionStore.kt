@@ -1,14 +1,15 @@
 package com.redplus.iptv.data.local
 
 import android.content.Context
+import android.net.Uri
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.ContentLoadingStrategy
-import androidx.datastore.preferences.preferencesDataStore
 import com.redplus.iptv.data.model.Session
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -23,12 +24,16 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
         val encryptedPassword = prefs[Keys.PASSWORD]
         if (!remember || encryptedServer.isNullOrBlank() || encryptedUser.isNullOrBlank() || encryptedPassword.isNullOrBlank()) null else runCatching {
             Session(
-                serverUrl = cryptoManager.decrypt(encryptedServer), username = cryptoManager.decrypt(encryptedUser), password = cryptoManager.decrypt(encryptedPassword),
-                status = prefs[Keys.STATUS] ?: "Unknown", expDate = prefs[Keys.EXPIRY], activeConnections = prefs[Keys.ACTIVE_CONS], maxConnections = prefs[Keys.MAX_CONS]
+                serverUrl = cryptoManager.decrypt(encryptedServer),
+                username = cryptoManager.decrypt(encryptedUser),
+                password = cryptoManager.decrypt(encryptedPassword),
+                status = prefs[Keys.STATUS] ?: "Unknown",
+                expDate = prefs[Keys.EXPIRY],
+                activeConnections = prefs[Keys.ACTIVE_CONS],
+                maxConnections = prefs[Keys.MAX_CONS]
             )
         }.getOrNull()
     }
-
 
     val appSettings: Flow<AppSettings> = context.sessionDataStore.data.map { prefs ->
         AppSettings(
@@ -46,7 +51,10 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             contentLoadingStrategy = runCatching { ContentLoadingStrategy.valueOf(prefs[Keys.CONTENT_LOADING_STRATEGY] ?: ContentLoadingStrategy.RUNTIME.name) }.getOrDefault(ContentLoadingStrategy.RUNTIME),
             useExternalLivePlayer = prefs[Keys.EXTERNAL_LIVE_PLAYER] ?: false,
             useExternalVodPlayer = prefs[Keys.EXTERNAL_VOD_PLAYER] ?: false,
-            externalXmlTvUrl = prefs[Keys.EXTERNAL_XMLTV_URL] ?: ""
+            externalXmlTvUrl = prefs[Keys.EXTERNAL_XMLTV_URL] ?: "",
+            tvViewMode = prefs[Keys.TV_VIEW_MODE] ?: false,
+            hiddenCategoryKeys = decodeSet(prefs[Keys.HIDDEN_CATEGORY_KEYS]),
+            categoryGroupMap = decodeMap(prefs[Keys.CATEGORY_GROUP_MAP])
         )
     }
 
@@ -84,18 +92,47 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             prefs[Keys.EXTERNAL_LIVE_PLAYER] = settings.useExternalLivePlayer
             prefs[Keys.EXTERNAL_VOD_PLAYER] = settings.useExternalVodPlayer
             prefs[Keys.EXTERNAL_XMLTV_URL] = settings.externalXmlTvUrl
+            prefs[Keys.TV_VIEW_MODE] = settings.tvViewMode
+            prefs[Keys.HIDDEN_CATEGORY_KEYS] = encodeSet(settings.hiddenCategoryKeys)
+            prefs[Keys.CATEGORY_GROUP_MAP] = encodeMap(settings.categoryGroupMap)
         }
     }
 
-
     private fun clearSensitive(prefs: MutablePreferences) {
-        prefs.remove(Keys.SERVER); prefs.remove(Keys.USERNAME); prefs.remove(Keys.PASSWORD); prefs.remove(Keys.STATUS); prefs.remove(Keys.EXPIRY); prefs.remove(Keys.ACTIVE_CONS); prefs.remove(Keys.MAX_CONS); prefs[Keys.REMEMBER] = false
+        prefs.remove(Keys.SERVER)
+        prefs.remove(Keys.USERNAME)
+        prefs.remove(Keys.PASSWORD)
+        prefs.remove(Keys.STATUS)
+        prefs.remove(Keys.EXPIRY)
+        prefs.remove(Keys.ACTIVE_CONS)
+        prefs.remove(Keys.MAX_CONS)
+        prefs[Keys.REMEMBER] = false
     }
-    private fun putOrRemove(prefs: MutablePreferences, key: Preferences.Key<String>, value: String?) { if (value.isNullOrBlank()) prefs.remove(key) else prefs[key] = value }
+
+    private fun putOrRemove(prefs: MutablePreferences, key: Preferences.Key<String>, value: String?) {
+        if (value.isNullOrBlank()) prefs.remove(key) else prefs[key] = value
+    }
+
+    private fun encodeSet(values: Set<String>): String = values.sorted().joinToString("\n") { Uri.encode(it) }
+    private fun decodeSet(raw: String?): Set<String> = raw.orEmpty().lineSequence().mapNotNull { runCatching { Uri.decode(it) }.getOrNull() }.filter { it.isNotBlank() }.toSet()
+    private fun encodeMap(values: Map<String, String>): String = values.entries.sortedBy { it.key }.joinToString("\n") { "${Uri.encode(it.key)}=${Uri.encode(it.value)}" }
+    private fun decodeMap(raw: String?): Map<String, String> = raw.orEmpty().lineSequence().mapNotNull { line ->
+        val idx = line.indexOf('=')
+        if (idx <= 0) null else {
+            val key = runCatching { Uri.decode(line.take(idx)) }.getOrDefault("")
+            val value = runCatching { Uri.decode(line.drop(idx + 1)) }.getOrDefault("").trim()
+            if (key.isBlank() || value.isBlank()) null else key to value
+        }
+    }.toMap()
 
     private object Keys {
-        val SERVER = stringPreferencesKey("server"); val USERNAME = stringPreferencesKey("username"); val PASSWORD = stringPreferencesKey("password")
-        val STATUS = stringPreferencesKey("status"); val EXPIRY = stringPreferencesKey("expiry"); val ACTIVE_CONS = stringPreferencesKey("active_connections"); val MAX_CONS = stringPreferencesKey("max_connections")
+        val SERVER = stringPreferencesKey("server")
+        val USERNAME = stringPreferencesKey("username")
+        val PASSWORD = stringPreferencesKey("password")
+        val STATUS = stringPreferencesKey("status")
+        val EXPIRY = stringPreferencesKey("expiry")
+        val ACTIVE_CONS = stringPreferencesKey("active_connections")
+        val MAX_CONS = stringPreferencesKey("max_connections")
         val REMEMBER = booleanPreferencesKey("remember")
         val SUBTITLES_ENABLED = booleanPreferencesKey("subtitles_enabled")
         val PREFERRED_SUBTITLE_LANGUAGE = stringPreferencesKey("preferred_subtitle_language")
@@ -112,5 +149,8 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
         val EXTERNAL_LIVE_PLAYER = booleanPreferencesKey("external_live_player")
         val EXTERNAL_VOD_PLAYER = booleanPreferencesKey("external_vod_player")
         val EXTERNAL_XMLTV_URL = stringPreferencesKey("external_xmltv_url")
+        val TV_VIEW_MODE = booleanPreferencesKey("tv_view_mode")
+        val HIDDEN_CATEGORY_KEYS = stringPreferencesKey("hidden_category_keys")
+        val CATEGORY_GROUP_MAP = stringPreferencesKey("category_group_map")
     }
 }
