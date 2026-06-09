@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -53,6 +54,9 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             useExternalVodPlayer = prefs[Keys.EXTERNAL_VOD_PLAYER] ?: false,
             externalXmlTvUrl = prefs[Keys.EXTERNAL_XMLTV_URL] ?: "",
             tvViewMode = prefs[Keys.TV_VIEW_MODE] ?: false,
+            showTimeSkipButtons = prefs[Keys.SHOW_TIME_SKIP_BUTTONS] ?: false,
+            forwardSkipSeconds = (prefs[Keys.FORWARD_SKIP_SECONDS] ?: 5).coerceIn(1, 600),
+            rewindSkipSeconds = (prefs[Keys.REWIND_SKIP_SECONDS] ?: 5).coerceIn(1, 600),
             hiddenCategoryKeys = decodeSet(prefs[Keys.HIDDEN_CATEGORY_KEYS]),
             categoryGroupMap = decodeMap(prefs[Keys.CATEGORY_GROUP_MAP])
         )
@@ -93,6 +97,9 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             prefs[Keys.EXTERNAL_VOD_PLAYER] = settings.useExternalVodPlayer
             prefs[Keys.EXTERNAL_XMLTV_URL] = settings.externalXmlTvUrl
             prefs[Keys.TV_VIEW_MODE] = settings.tvViewMode
+            prefs[Keys.SHOW_TIME_SKIP_BUTTONS] = settings.showTimeSkipButtons
+            prefs[Keys.FORWARD_SKIP_SECONDS] = settings.forwardSkipSeconds.coerceIn(1, 600)
+            prefs[Keys.REWIND_SKIP_SECONDS] = settings.rewindSkipSeconds.coerceIn(1, 600)
             prefs[Keys.HIDDEN_CATEGORY_KEYS] = encodeSet(settings.hiddenCategoryKeys)
             prefs[Keys.CATEGORY_GROUP_MAP] = encodeMap(settings.categoryGroupMap)
         }
@@ -150,6 +157,9 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
         val EXTERNAL_VOD_PLAYER = booleanPreferencesKey("external_vod_player")
         val EXTERNAL_XMLTV_URL = stringPreferencesKey("external_xmltv_url")
         val TV_VIEW_MODE = booleanPreferencesKey("tv_view_mode")
+        val SHOW_TIME_SKIP_BUTTONS = booleanPreferencesKey("show_time_skip_buttons")
+        val FORWARD_SKIP_SECONDS = intPreferencesKey("forward_skip_seconds")
+        val REWIND_SKIP_SECONDS = intPreferencesKey("rewind_skip_seconds")
         val HIDDEN_CATEGORY_KEYS = stringPreferencesKey("hidden_category_keys")
         val CATEGORY_GROUP_MAP = stringPreferencesKey("category_group_map")
     }

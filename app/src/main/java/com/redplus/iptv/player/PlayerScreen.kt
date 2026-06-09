@@ -98,6 +98,8 @@ import com.redplus.iptv.ui.theme.PremiumPanel
 import com.redplus.iptv.ui.theme.PremiumRed
 import com.redplus.iptv.util.msToTime
 import com.redplus.iptv.util.unixToLocalTime
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -256,7 +258,7 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
             val lastPosition = player.currentPosition.coerceAtLeast(0L)
             val rawDuration = player.duration
             val lastDuration = if (rawDuration > 0) rawDuration else 0L
-            scope.launch { container.libraryRepository.saveWatchProgress(session.accountKey, item, lastPosition, lastDuration) }
+            CoroutineScope(Dispatchers.IO).launch { container.libraryRepository.saveWatchProgress(session.accountKey, item, lastPosition, lastDuration) }
             player.removeListener(listener)
             player.release()
         }
@@ -299,8 +301,10 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
                     onTap = { overlay = !overlay },
                     onDoubleTap = { offset ->
                         if (!locked && player.isCurrentMediaItemSeekable) {
-                            if (offset.x < size.width / 2) player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0))
-                            else player.seekTo(player.currentPosition + 10_000)
+                            val rewindMs = settings.rewindSkipSeconds.coerceIn(1, 600) * 1000L
+                            val forwardMs = settings.forwardSkipSeconds.coerceIn(1, 600) * 1000L
+                            if (offset.x < size.width / 2) player.seekTo((player.currentPosition - rewindMs).coerceAtLeast(0))
+                            else player.seekTo(player.currentPosition + forwardMs)
                         }
                     }
                 )
@@ -356,8 +360,14 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
                 urlCount = streamUrls.size,
                 timeline = timelineState,
                 error = error,
+                isPlaying = isPlaying,
+                showSkipButtons = settings.showTimeSkipButtons,
+                forwardSkipSeconds = settings.forwardSkipSeconds.coerceIn(1, 600),
+                rewindSkipSeconds = settings.rewindSkipSeconds.coerceIn(1, 600),
                 onOptions = { showOptions = true },
                 onRotate = { toggleLandscape(context) },
+                onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+                onSeekBy = { by -> if (player.isCurrentMediaItemSeekable) player.seekTo((player.currentPosition + by).coerceAtLeast(0L)) },
                 onRetry = {
                     error = null
                     if (urlIndex < streamUrls.lastIndex) urlIndex += 1 else {
@@ -418,8 +428,14 @@ private fun MinimalPlayerOverlay(
     urlCount: Int,
     timeline: List<EpgProgram>,
     error: String?,
+    isPlaying: Boolean,
+    showSkipButtons: Boolean,
+    forwardSkipSeconds: Int,
+    rewindSkipSeconds: Int,
     onOptions: () -> Unit,
     onRotate: () -> Unit,
+    onPlayPause: () -> Unit,
+    onSeekBy: (Long) -> Unit,
     onRetry: () -> Unit
 ) {
     Box(Modifier.fillMaxSize().padding(10.dp)) {
@@ -427,6 +443,24 @@ private fun MinimalPlayerOverlay(
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(playbackSubtitle(item, position, duration, urlIndex, urlCount, resizeMode), color = PremiumMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
+        }
+
+
+
+        Row(
+            modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(alpha = .38f), RoundedCornerShape(20.dp)).padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (showSkipButtons && item.type != ContentType.LIVE && item.type != ContentType.EVENT) {
+                TextButton(onClick = { onSeekBy(-rewindSkipSeconds.coerceIn(1, 600) * 1000L) }) { Text("-${rewindSkipSeconds}s") }
+            }
+            IconButton(onClick = onPlayPause, modifier = Modifier.background(PremiumRed.copy(alpha = .92f), RoundedCornerShape(50))) {
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play", tint = Color.White)
+            }
+            if (showSkipButtons && item.type != ContentType.LIVE && item.type != ContentType.EVENT) {
+                TextButton(onClick = { onSeekBy(forwardSkipSeconds.coerceIn(1, 600) * 1000L) }) { Text("+${forwardSkipSeconds}s") }
             }
         }
 
@@ -514,8 +548,8 @@ private fun PlayerOptionsDialog(
                 Text("Playback", fontWeight = FontWeight.Bold)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     AssistChip(onClick = onPlayPause, label = { Text(if (isPlaying) "Pause" else "Play") }, leadingIcon = { Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null) })
-                    AssistChip(onClick = { onSeekBy(-10_000L) }, label = { Text("-10s") })
-                    AssistChip(onClick = { onSeekBy(10_000L) }, label = { Text("+10s") })
+                    AssistChip(onClick = { onSeekBy(-settings.rewindSkipSeconds.coerceIn(1, 600) * 1000L) }, label = { Text("-${settings.rewindSkipSeconds.coerceIn(1, 600)}s") })
+                    AssistChip(onClick = { onSeekBy(settings.forwardSkipSeconds.coerceIn(1, 600) * 1000L) }, label = { Text("+${settings.forwardSkipSeconds.coerceIn(1, 600)}s") })
                     AssistChip(onClick = onBack, label = { Text("Back") })
                 }
                 if (duration > 0 && item.type != ContentType.LIVE && item.type != ContentType.EVENT) {

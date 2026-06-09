@@ -68,6 +68,7 @@ import com.redplus.iptv.util.containsNormalized
 import com.redplus.iptv.util.msToTime
 import com.redplus.iptv.util.unixToLocalTime
 import com.redplus.iptv.util.xtreamExpiryToText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -82,6 +83,8 @@ private fun <T> rememberLoadState(vararg keys: Any?, block: suspend () -> T): St
     value = LoadState.Loading
     value = try {
         LoadState.Data(block())
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
         LoadState.Error(e.message ?: "Unknown error", e.stackTraceToString())
     }
@@ -729,73 +732,76 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
-            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-                when (tab) {
-                    0 -> {
-                        item { SettingsSection("Account", listOf("Server: ${session.serverUrl}", "Username: ${session.username}", "Status: ${session.status}", "Expiry: ${xtreamExpiryToText(session.expDate)}")) }
-                        item { SettingsSection("Data", listOf("Cache is local", "Favorites and history are stored per account", "No IPTV links or playlists are bundled with this app")) }
-                        item {
-                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { scope.launch { container.libraryRepository.clearCache() } }, modifier = Modifier.fillMaxWidth()) { Text("Clear cache") }
-                                Button(onClick = { scope.launch { container.libraryRepository.clearFavorites(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear favorites") }
-                                Button(onClick = { scope.launch { container.libraryRepository.clearHistory(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear history") }
-                                Button(onClick = { scope.launch { container.authRepository.logout(); onLogout() } }, modifier = Modifier.fillMaxWidth()) { Text("Logout / Clear saved account") }
+            if (tab == 4) {
+                CategoryCustomizationPanel(session, container, settings, ::save, Modifier.weight(1f))
+            } else {
+                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                    when (tab) {
+                        0 -> {
+                            item { SettingsSection("Account", listOf("Server: ${session.serverUrl}", "Username: ${session.username}", "Status: ${session.status}", "Expiry: ${xtreamExpiryToText(session.expDate)}")) }
+                            item { SettingsSection("Data", listOf("Cache is local", "Favorites and history are stored per account", "No IPTV links or playlists are bundled with this app")) }
+                            item {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(onClick = { scope.launch { container.libraryRepository.clearCache() } }, modifier = Modifier.fillMaxWidth()) { Text("Clear cache") }
+                                    Button(onClick = { scope.launch { container.libraryRepository.clearFavorites(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear favorites") }
+                                    Button(onClick = { scope.launch { container.libraryRepository.clearHistory(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear history") }
+                                    Button(onClick = { scope.launch { container.authRepository.logout(); onLogout() } }, modifier = Modifier.fillMaxWidth()) { Text("Logout / Clear saved account") }
+                                }
+                            }
+                            item { Text("RedPlus IPTV v1.2.1 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
+                        }
+                        1 -> {
+                            item {
+                                SettingsPanel("Subtitles") {
+                                    SettingsCheckboxRow("Enable subtitles", settings.subtitlesEnabled) { save(settings.copy(subtitlesEnabled = it)) }
+                                    SettingsDropdown("Subtitle language", settings.preferredSubtitleLanguage, listOf("auto", "off", "en", "ar", "fr", "es", "de", "tr")) { save(settings.copy(preferredSubtitleLanguage = it, subtitlesEnabled = it != "off")) }
+                                    OutlinedTextField(
+                                        value = settings.externalSubtitleUrl,
+                                        onValueChange = { save(settings.copy(externalSubtitleUrl = it)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        label = { Text("External subtitle URL (.srt/.vtt/.ass)") }
+                                    )
+                                    Text("Player Options also lets the user switch embedded subtitle tracks while watching.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
-                        item { Text("RedPlus IPTV v1.2.0 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
-                    }
-                    1 -> {
-                        item {
-                            SettingsPanel("Subtitles") {
-                                SettingsCheckboxRow("Enable subtitles", settings.subtitlesEnabled) { save(settings.copy(subtitlesEnabled = it)) }
-                                SettingsDropdown("Subtitle language", settings.preferredSubtitleLanguage, listOf("auto", "off", "en", "ar", "fr", "es", "de", "tr")) { save(settings.copy(preferredSubtitleLanguage = it, subtitlesEnabled = it != "off")) }
-                                OutlinedTextField(
-                                    value = settings.externalSubtitleUrl,
-                                    onValueChange = { save(settings.copy(externalSubtitleUrl = it)) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    label = { Text("External subtitle URL (.srt/.vtt/.ass)") }
-                                )
-                                Text("Player Options also lets the user switch embedded subtitle tracks while watching.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                        2 -> {
+                            item {
+                                SettingsPanel("Playback") {
+                                    SettingsCheckboxRow("Always start the whole app horizontally", settings.forceLandscapeApp) { save(settings.copy(forceLandscapeApp = it)) }
+                                    SettingsCheckboxRow("TV view menus for channels and VOD", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
+                                    SettingsCheckboxRow("Use external Live TV player", settings.useExternalLivePlayer) { save(settings.copy(useExternalLivePlayer = it)) }
+                                    SettingsCheckboxRow("Use external VOD/Series player", settings.useExternalVodPlayer) { save(settings.copy(useExternalVodPlayer = it)) }
+                                    SettingsCheckboxRow("Show time-skip arrows beside play/pause", settings.showTimeSkipButtons) { save(settings.copy(showTimeSkipButtons = it)) }
+                                    SettingsNumberField("Skip forward seconds", settings.forwardSkipSeconds) { save(settings.copy(forwardSkipSeconds = it)) }
+                                    SettingsNumberField("Rewind seconds", settings.rewindSkipSeconds) { save(settings.copy(rewindSkipSeconds = it)) }
+                                    Text("Skip arrows appear in the middle of the player beside the play/pause button. Values are clamped between 1 and 600 seconds.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                    Text("When external player is enabled, Android opens a player chooser for that stream type. Internal playback remains available by turning it off.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
-                    }
-                    2 -> {
-                        item {
-                            SettingsPanel("Playback") {
-                                SettingsCheckboxRow("Always start the whole app horizontally", settings.forceLandscapeApp) { save(settings.copy(forceLandscapeApp = it)) }
-                                SettingsCheckboxRow("TV view menus for channels and VOD", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
-                                SettingsCheckboxRow("Use external Live TV player", settings.useExternalLivePlayer) { save(settings.copy(useExternalLivePlayer = it)) }
-                                SettingsCheckboxRow("Use external VOD/Series player", settings.useExternalVodPlayer) { save(settings.copy(useExternalVodPlayer = it)) }
-                                Text("When external player is enabled, Android opens a player chooser for that stream type. Internal playback remains available by turning it off.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                        3 -> {
+                            item {
+                                SettingsPanel("Runtimes") {
+                                    SettingsCheckboxRow("Stream URL redirection check", settings.streamUrlRedirectionCheck) { save(settings.copy(streamUrlRedirectionCheck = it)) }
+                                    SettingsCheckboxRow("Live TV EPG", settings.liveTvEpg) { save(settings.copy(liveTvEpg = it)) }
+                                    SettingsCheckboxRow("Use extension in stream URL", settings.useExtensionInStreamUrl) { save(settings.copy(useExtensionInStreamUrl = it)) }
+                                    SettingsCheckboxRow("Use m3u8 format in Live TV stream URL", settings.useM3uFormatInStreamUrl) { save(settings.copy(useM3uFormatInStreamUrl = it)) }
+                                    SettingsCheckboxRow("Use runtime function in Movies section", settings.useRuntimeMovies) { save(settings.copy(useRuntimeMovies = it)) }
+                                    SettingsCheckboxRow("Use runtime function in Series section", settings.useRuntimeSeries) { save(settings.copy(useRuntimeSeries = it)) }
+                                    SettingsCheckboxRow("Use UTF-8 decode / text repair", settings.useUtf8Decode) { save(settings.copy(useUtf8Decode = it)) }
+                                    SettingsDropdown("Content loading strategy", settings.contentLoadingStrategy.name, ContentLoadingStrategy.entries.map { it.name }) { save(settings.copy(contentLoadingStrategy = ContentLoadingStrategy.valueOf(it))) }
+                                    OutlinedTextField(
+                                        value = settings.externalXmlTvUrl,
+                                        onValueChange = { save(settings.copy(externalXmlTvUrl = it)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        label = { Text("Optional XMLTV EPG URL") }
+                                    )
+                                    Text("For schedule data, the app first uses the provider Xtream EPG. If you enter a legal XMLTV feed URL, it tries to match channel names/EPG IDs and show that timeline.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                }
                             }
-                        }
-                    }
-                    3 -> {
-                        item {
-                            SettingsPanel("Runtimes") {
-                                SettingsCheckboxRow("Stream URL redirection check", settings.streamUrlRedirectionCheck) { save(settings.copy(streamUrlRedirectionCheck = it)) }
-                                SettingsCheckboxRow("Live TV EPG", settings.liveTvEpg) { save(settings.copy(liveTvEpg = it)) }
-                                SettingsCheckboxRow("Use extension in stream URL", settings.useExtensionInStreamUrl) { save(settings.copy(useExtensionInStreamUrl = it)) }
-                                SettingsCheckboxRow("Use m3u8 format in Live TV stream URL", settings.useM3uFormatInStreamUrl) { save(settings.copy(useM3uFormatInStreamUrl = it)) }
-                                SettingsCheckboxRow("Use runtime function in Movies section", settings.useRuntimeMovies) { save(settings.copy(useRuntimeMovies = it)) }
-                                SettingsCheckboxRow("Use runtime function in Series section", settings.useRuntimeSeries) { save(settings.copy(useRuntimeSeries = it)) }
-                                SettingsCheckboxRow("Use UTF-8 decode / text repair", settings.useUtf8Decode) { save(settings.copy(useUtf8Decode = it)) }
-                                SettingsDropdown("Content loading strategy", settings.contentLoadingStrategy.name, ContentLoadingStrategy.entries.map { it.name }) { save(settings.copy(contentLoadingStrategy = ContentLoadingStrategy.valueOf(it))) }
-                                OutlinedTextField(
-                                    value = settings.externalXmlTvUrl,
-                                    onValueChange = { save(settings.copy(externalXmlTvUrl = it)) },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    label = { Text("Optional XMLTV EPG URL") }
-                                )
-                                Text("For schedule data, the app first uses the provider Xtream EPG. If you enter a legal XMLTV feed URL, it tries to match channel names/EPG IDs and show that timeline.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                    else -> {
-                        item {
-                            CategoryCustomizationPanel(session, container, settings, ::save)
                         }
                     }
                 }
@@ -859,7 +865,7 @@ private fun TvCatalogView(
 }
 
 @Composable
-private fun CategoryCustomizationPanel(session: Session, container: AppContainer, settings: AppSettings, save: (AppSettings) -> Unit) {
+private fun CategoryCustomizationPanel(session: Session, container: AppContainer, settings: AppSettings, save: (AppSettings) -> Unit, modifier: Modifier = Modifier) {
     var query by remember { mutableStateOf("") }
     val state by rememberLoadState(session.accountKey, "category-customization") {
         listOf(
@@ -868,24 +874,44 @@ private fun CategoryCustomizationPanel(session: Session, container: AppContainer
             CategorySection("series", "Series / Shows", container.contentRepository.seriesCategories(session))
         )
     }
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        SettingsPanel("Category customization") {
-            SettingsCheckboxRow("Use TV-style see-through menus", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
-            SearchBox(query, { query = it }, Modifier.fillMaxWidth(), "Search categories")
-            Text("Hide categories you do not want to see, or type the same group name on several categories to merge them into one menu chip.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-        }
-        when (state) {
-            LoadState.Loading -> LoadingState("Loading categories...")
-            is LoadState.Error -> ErrorState((state as LoadState.Error).message, (state as LoadState.Error).detail)
-            is LoadState.Data -> {
-                (state as LoadState.Data<List<CategorySection>>).value.forEach { section ->
+
+    when (state) {
+        LoadState.Loading -> LoadingState("Loading categories...")
+        is LoadState.Error -> ErrorState((state as LoadState.Error).message, (state as LoadState.Error).detail)
+        is LoadState.Data -> {
+            val sections = (state as LoadState.Data<List<CategorySection>>).value
+            LazyColumn(modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                item {
+                    SettingsPanel("Category customization") {
+                        SettingsCheckboxRow("Use TV-style see-through menus", settings.tvViewMode) { save(settings.copy(tvViewMode = it)) }
+                        SearchBox(query, { query = it }, Modifier.fillMaxWidth(), "Search categories")
+                        Text("Only visible rows are rendered, so this page stays stable even with very large provider category lists.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                        Text("Hide categories you do not want to see, or type the same group name on several categories to merge them into one menu chip.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                sections.forEach { section ->
                     val rows = section.categories.filter { query.isBlank() || it.name.containsNormalized(query) }
-                    SettingsPanel("${section.title} categories") {
-                        if (rows.isEmpty()) Text("No categories matched.", color = PremiumMuted)
-                        rows.take(120).forEach { category ->
+                    item(key = section.kind + "_header") {
+                        SettingsPanel("${section.title} categories") {
+                            Text("${rows.size} shown from ${section.categories.size} total", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = {
+                                    val keys = rows.map { categoryKey(section.kind, it.id) }.toSet()
+                                    save(settings.copy(hiddenCategoryKeys = settings.hiddenCategoryKeys + keys))
+                                }, modifier = Modifier.weight(1f)) { Text("Hide shown") }
+                                Button(onClick = {
+                                    val keys = rows.map { categoryKey(section.kind, it.id) }.toSet()
+                                    save(settings.copy(hiddenCategoryKeys = settings.hiddenCategoryKeys - keys))
+                                }, modifier = Modifier.weight(1f)) { Text("Show shown") }
+                            }
+                        }
+                    }
+                    if (rows.isEmpty()) {
+                        item(key = section.kind + "_empty") { Text("No ${section.title} categories matched.", color = PremiumMuted) }
+                    } else {
+                        items(rows, key = { section.kind + ":" + it.id }) { category ->
                             CategoryCustomizationRow(section.kind, category, settings, save)
                         }
-                        if (rows.size > 120) Text("Showing first 120 matches. Use search to narrow the list.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -980,6 +1006,19 @@ private fun SettingsCheckboxRow(label: String, checked: Boolean, onChange: (Bool
         Checkbox(checked = checked, onCheckedChange = onChange)
         Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+@Composable
+private fun SettingsNumberField(label: String, value: Int, onChange: (Int) -> Unit) {
+    OutlinedTextField(
+        value = value.toString(),
+        onValueChange = { raw ->
+            raw.filter { it.isDigit() }.toIntOrNull()?.coerceIn(1, 600)?.let(onChange)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text(label) }
+    )
 }
 
 @Composable

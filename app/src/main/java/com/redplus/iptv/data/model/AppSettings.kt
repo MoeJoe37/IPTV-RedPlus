@@ -17,6 +17,9 @@ data class AppSettings(
     val useExternalVodPlayer: Boolean = false,
     val externalXmlTvUrl: String = "",
     val tvViewMode: Boolean = false,
+    val showTimeSkipButtons: Boolean = false,
+    val forwardSkipSeconds: Int = 5,
+    val rewindSkipSeconds: Int = 5,
     val hiddenCategoryKeys: Set<String> = emptySet(),
     val categoryGroupMap: Map<String, String> = emptyMap()
 )
