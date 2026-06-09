@@ -58,6 +58,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -78,10 +79,12 @@ import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.redplus.iptv.R
 import com.redplus.iptv.data.AppContainer
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.ContentItem
@@ -100,6 +103,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.Media
+import org.videolan.libvlc.MediaPlayer as VlcMediaPlayer
+import org.videolan.libvlc.util.VLCVideoLayout
 import kotlin.math.roundToInt
 
 @OptIn(UnstableApi::class)
@@ -171,9 +178,244 @@ private fun ExternalPlayerLauncher(item: ContentItem, url: String, onBack: () ->
     }
 }
 
-@OptIn(UnstableApi::class)
+@Composable
+private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: ContentItem, settings: AppSettings, streamUrls: List<String>, onBack: () -> Unit) {
+    val context = LocalContext.current
+    val activity = context as? Activity
+    var urlIndex by remember(streamUrls) { mutableIntStateOf(0) }
+    val streamUrl = streamUrls.getOrElse(urlIndex) { streamUrls.first() }
+    var resizeMode by remember { mutableStateOf(ResizeMode.Fit) }
+    var locked by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var position by remember { mutableLongStateOf(0L) }
+    var duration by remember { mutableLongStateOf(0L) }
+    var overlay by remember { mutableStateOf(true) }
+    var brightness by remember { mutableFloatStateOf(-1f) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var showOptions by remember { mutableStateOf(false) }
+    var gestureIndicator by remember { mutableStateOf<GestureIndicator?>(null) }
+    val vlcLayout = remember { VLCVideoLayout(context) }
+    val vlcOptions = remember {
+        arrayListOf(
+            "--aout=opensles",
+            "--audio-time-stretch",
+            "--network-caching=2500",
+            "--http-reconnect",
+            "--no-drop-late-frames",
+            "--no-skip-frames"
+        )
+    }
+    val libVlc = remember(streamUrl) { LibVLC(context, vlcOptions) }
+    val vlcPlayer = remember(streamUrl) { VlcMediaPlayer(libVlc) }
+
+    DisposableEffect(activity, settings.forceLandscapeApp) {
+        activity?.enterPlayerFullscreen()
+        onDispose {
+            activity?.exitPlayerFullscreen(settings.forceLandscapeApp)
+            activity?.window?.let { window ->
+                val attrs = window.attributes
+                attrs.screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                window.attributes = attrs
+            }
+        }
+    }
+
+    BackHandler(enabled = true) {
+        if (!locked) onBack()
+    }
+
+    DisposableEffect(streamUrl) {
+        error = null
+        vlcPlayer.attachViews(vlcLayout, null, false, false)
+        vlcPlayer.setEventListener { event ->
+            when (event.type) {
+                VlcMediaPlayer.Event.Playing -> isPlaying = true
+                VlcMediaPlayer.Event.Paused, VlcMediaPlayer.Event.Stopped, VlcMediaPlayer.Event.EndReached -> isPlaying = false
+                VlcMediaPlayer.Event.EncounteredError -> {
+                    isPlaying = false
+                    if (urlIndex < streamUrls.lastIndex) {
+                        error = "VOD source failed. Trying alternate source ${urlIndex + 2}/${streamUrls.size}..."
+                        urlIndex += 1
+                    } else {
+                        error = "This VOD could not be played internally. Try Open externally from the options menu."
+                    }
+                }
+            }
+        }
+        val media = Media(libVlc, Uri.parse(streamUrl)).apply {
+            setHWDecoderEnabled(true, false)
+            addOption(":network-caching=2500")
+            addOption(":http-reconnect")
+            addOption(":audio-time-stretch")
+        }
+        vlcPlayer.media = media
+        media.release()
+        vlcPlayer.play()
+        onDispose {
+            val lastPosition = runCatching { vlcPlayer.time.coerceAtLeast(0L) }.getOrDefault(0L)
+            val lastDuration = runCatching { vlcPlayer.length.coerceAtLeast(0L) }.getOrDefault(0L)
+            CoroutineScope(Dispatchers.IO).launch { container.libraryRepository.saveWatchProgress(session.accountKey, item, lastPosition, lastDuration) }
+            runCatching { vlcPlayer.stop() }
+            runCatching { vlcPlayer.detachViews() }
+            runCatching { vlcPlayer.release() }
+            runCatching { libVlc.release() }
+        }
+    }
+
+    LaunchedEffect(item.id, streamUrl) {
+        val history = container.libraryRepository.historyFor(session.accountKey, item)
+        if (history != null && history.positionMs > 0) {
+            delay(500)
+            runCatching { vlcPlayer.time = history.positionMs }
+        }
+        container.libraryRepository.saveWatchProgress(session.accountKey, item, 0, 0)
+    }
+
+    LaunchedEffect(vlcPlayer) {
+        while (true) {
+            position = runCatching { vlcPlayer.time.coerceAtLeast(0L) }.getOrDefault(0L)
+            duration = runCatching { vlcPlayer.length.coerceAtLeast(0L) }.getOrDefault(0L)
+            isPlaying = runCatching { vlcPlayer.isPlaying }.getOrDefault(isPlaying)
+            delay(700)
+        }
+    }
+
+    LaunchedEffect(gestureIndicator) {
+        if (gestureIndicator != null) {
+            delay(900)
+            gestureIndicator = null
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(locked) {
+                detectTapGestures(
+                    onTap = { if (!locked) overlay = !overlay else overlay = true },
+                    onDoubleTap = { offset ->
+                        if (!locked && duration > 0) {
+                            val rewindMs = settings.rewindSkipSeconds.coerceIn(1, 600) * 1000L
+                            val forwardMs = settings.forwardSkipSeconds.coerceIn(1, 600) * 1000L
+                            val next = if (offset.x < size.width / 2) position - rewindMs else position + forwardMs
+                            vlcPlayer.time = next.coerceIn(0L, duration)
+                        }
+                    }
+                )
+            }
+            .pointerInput(locked) {
+                detectVerticalDragGestures { change, dragAmount ->
+                    if (locked) return@detectVerticalDragGestures
+                    val isLeft = change.position.x < size.width / 2
+                    if (isLeft) {
+                        val current = if (brightness >= 0f) brightness else (activity?.window?.attributes?.screenBrightness ?: 0.5f).let { if (it < 0f) 0.5f else it }
+                        brightness = (current - dragAmount / 900f).coerceIn(0.05f, 1f)
+                        activity?.window?.let { window ->
+                            val attrs = window.attributes
+                            attrs.screenBrightness = brightness
+                            window.attributes = attrs
+                        }
+                        gestureIndicator = GestureIndicator("Brightness", brightness)
+                    } else {
+                        val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                        val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+                        val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                        val next = (cur - dragAmount / 90f).roundToInt().coerceIn(0, max)
+                        audio.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
+                        gestureIndicator = GestureIndicator("Volume", next.toFloat() / max.toFloat())
+                    }
+                }
+            }
+    ) {
+        AndroidView(factory = { vlcLayout }, modifier = Modifier.fillMaxSize())
+
+        if (overlay) {
+            MinimalPlayerOverlay(
+                item = item,
+                position = position,
+                duration = duration,
+                resizeMode = resizeMode,
+                locked = locked,
+                urlIndex = urlIndex,
+                urlCount = streamUrls.size,
+                timeline = emptyList(),
+                error = error,
+                isPlaying = isPlaying,
+                showSkipButtons = settings.showTimeSkipButtons,
+                forwardSkipSeconds = settings.forwardSkipSeconds.coerceIn(1, 600),
+                rewindSkipSeconds = settings.rewindSkipSeconds.coerceIn(1, 600),
+                onOptions = { if (!locked) showOptions = true },
+                onResize = { if (!locked) resizeMode = resizeMode.next() },
+                onRotate = { if (!locked) toggleLandscape(context) },
+                onLock = { locked = !locked; overlay = true },
+                onPlayPause = { if (!locked) { if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play() } },
+                onSeekBy = { by -> if (!locked && duration > 0) vlcPlayer.time = (position + by).coerceIn(0L, duration) },
+                onSeek = { next -> if (!locked && duration > 0) vlcPlayer.time = next.coerceIn(0L, duration) },
+                onRetry = {
+                    error = null
+                    if (urlIndex < streamUrls.lastIndex) urlIndex += 1 else {
+                        runCatching { vlcPlayer.stop() }
+                        runCatching { vlcPlayer.play() }
+                    }
+                }
+            )
+        }
+
+        gestureIndicator?.let { GestureIndicatorView(it, Modifier.align(Alignment.Center)) }
+
+        if (showOptions) {
+            VlcVodOptionsDialog(
+                item = item,
+                streamUrls = streamUrls,
+                urlIndex = urlIndex,
+                onDismiss = { showOptions = false },
+                onSource = { next -> urlIndex = next; showOptions = false },
+                onOpenExternal = { runCatching { openExternalPlayer(context, streamUrl, item.title) }.onFailure { error = it.message } }
+            )
+        }
+    }
+}
+
+@Composable
+private fun VlcVodOptionsDialog(
+    item: ContentItem,
+    streamUrls: List<String>,
+    urlIndex: Int,
+    onDismiss: () -> Unit,
+    onSource: (Int) -> Unit,
+    onOpenExternal: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("VOD player") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(item.title, maxLines = 2, overflow = TextOverflow.Ellipsis, color = PremiumMuted)
+                Text("VOD uses the VLC playback engine for wider audio codec support.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                streamUrls.forEachIndexed { index, url ->
+                    OptionMenuRow(sourceLabel(url, index, index == urlIndex), if (index == urlIndex) "Current source" else "Switch source") { onSource(index) }
+                }
+                Button(onClick = onOpenExternal, modifier = Modifier.fillMaxWidth()) { Text("Open externally") }
+            }
+        }
+    )
+}
+
 @Composable
 private fun InternalPlayerScreen(session: Session, container: AppContainer, item: ContentItem, settings: AppSettings, streamUrls: List<String>, onBack: () -> Unit) {
+    val isVodLike = item.type == ContentType.MOVIE || item.type == ContentType.SERIES || item.type == ContentType.EPISODE
+    if (isVodLike) {
+        VlcVodPlayerScreen(session, container, item, settings, streamUrls, onBack)
+    } else {
+        Media3InternalPlayerScreen(session, container, item, settings, streamUrls, onBack)
+    }
+}
+
+@OptIn(UnstableApi::class)
+@Composable
+private fun Media3InternalPlayerScreen(session: Session, container: AppContainer, item: ContentItem, settings: AppSettings, streamUrls: List<String>, onBack: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     var urlIndex by remember(streamUrls) { mutableIntStateOf(0) }
@@ -208,22 +450,26 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
         }
     }
 
+
     BackHandler(enabled = true) {
         if (!locked) onBack()
     }
 
     val mediaItem = remember(streamUrl, settings.externalSubtitleUrl, settings.preferredSubtitleLanguage, settings.subtitlesEnabled) {
-        buildMediaItem(streamUrl, settings)
+        buildMediaItem(streamUrl, settings, item)
     }
 
     val player = remember(streamUrl, mediaItem) {
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("RedPlusIPTV/1.2")
+            .setUserAgent("RedPlusIPTV/1.3")
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(30_000)
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
-        ExoPlayer.Builder(context)
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)
+        ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build()
             .apply {
@@ -251,6 +497,7 @@ private fun InternalPlayerScreen(session: Session, container: AppContainer, item
                 subtitleChoices = player.subtitleChoices()
                 audioChoices = player.audioChoices()
                 videoChoices = player.videoChoices(streamUrls, urlIndex)
+                player.ensureAudioEnabled()
             }
 
             override fun onIsPlayingChanged(value: Boolean) {
@@ -468,10 +715,17 @@ private fun MinimalPlayerOverlay(
                     modifier = Modifier.background(Color.Black.copy(alpha = .44f), RoundedCornerShape(12.dp))
                 ) { Text("↻", color = Color.White, style = MaterialTheme.typography.titleMedium) }
             }
-            TextButton(
+            IconButton(
                 onClick = onLock,
                 modifier = Modifier.background(Color.Black.copy(alpha = .50f), RoundedCornerShape(12.dp))
-            ) { Text(if (locked) "🔒" else "🔓", color = Color.White, style = MaterialTheme.typography.titleMedium) }
+            ) {
+                Icon(
+                    painter = painterResource(if (locked) R.drawable.redplus_lock else R.drawable.redplus_unlock),
+                    contentDescription = if (locked) "Unlock controls" else "Lock controls",
+                    tint = Color.Unspecified,
+                    modifier = Modifier.width(24.dp).height(24.dp)
+                )
+            }
         }
 
         if (!locked) {
@@ -643,7 +897,7 @@ private fun OptionMenuRow(title: String, subtitle: String, onClick: () -> Unit) 
     }
 }
 
-private fun buildMediaItem(url: String, settings: AppSettings): MediaItem {
+private fun buildMediaItem(url: String, settings: AppSettings, item: ContentItem): MediaItem {
     val builder = MediaItem.Builder().setUri(url)
     streamMimeType(url)?.let { builder.setMimeType(it) }
     if (settings.subtitlesEnabled && settings.externalSubtitleUrl.isNotBlank()) {

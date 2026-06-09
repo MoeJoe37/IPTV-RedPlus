@@ -57,7 +57,15 @@ class XtreamClient(
         val user = username.urlPart()
         val pass = password.urlPart()
         val ext = extension.cleanExtension("mp4")
-        return if (useExtension) listOf("$base/movie/$user/$pass/$streamId.$ext", "$base/movie/$user/$pass/$streamId") else listOf("$base/movie/$user/$pass/$streamId")
+        val urls = mutableListOf<String>()
+        if (useExtension) {
+            urls += "$base/movie/$user/$pass/$streamId.$ext"
+            if (ext != "mp4") urls += "$base/movie/$user/$pass/$streamId.mp4"
+            if (ext != "m3u8") urls += "$base/movie/$user/$pass/$streamId.m3u8"
+            if (ext != "mkv") urls += "$base/movie/$user/$pass/$streamId.mkv"
+        }
+        urls += "$base/movie/$user/$pass/$streamId"
+        return urls.distinct()
     }
 
     fun buildSeriesUrls(serverUrl: String, username: String, password: String, episodeId: String, extension: String?, useExtension: Boolean): List<String> {
@@ -65,7 +73,15 @@ class XtreamClient(
         val user = username.urlPart()
         val pass = password.urlPart()
         val ext = extension.cleanExtension("mp4")
-        return if (useExtension) listOf("$base/series/$user/$pass/$episodeId.$ext", "$base/series/$user/$pass/$episodeId") else listOf("$base/series/$user/$pass/$episodeId")
+        val urls = mutableListOf<String>()
+        if (useExtension) {
+            urls += "$base/series/$user/$pass/$episodeId.$ext"
+            if (ext != "mp4") urls += "$base/series/$user/$pass/$episodeId.mp4"
+            if (ext != "m3u8") urls += "$base/series/$user/$pass/$episodeId.m3u8"
+            if (ext != "mkv") urls += "$base/series/$user/$pass/$episodeId.mkv"
+        }
+        urls += "$base/series/$user/$pass/$episodeId"
+        return urls.distinct()
     }
 
     suspend fun resolveRedirect(url: String): String = withContext(Dispatchers.IO) {

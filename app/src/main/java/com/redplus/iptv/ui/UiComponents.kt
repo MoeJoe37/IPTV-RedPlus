@@ -33,7 +33,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Search
@@ -64,10 +63,13 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import androidx.compose.foundation.Image
+import com.redplus.iptv.R
 import com.redplus.iptv.data.model.ContentItem
 import com.redplus.iptv.ui.theme.PremiumBg
 import com.redplus.iptv.ui.theme.PremiumMuted
@@ -99,11 +101,19 @@ fun GlassPanel(modifier: Modifier = Modifier, focused: Boolean = false, onClick:
 
 @Composable
 fun RedPlusLogo(modifier: Modifier = Modifier) {
-    Box(modifier.clip(RoundedCornerShape(28.dp)).background(Brush.linearGradient(listOf(PremiumRed, Color(0xFF70040A)))).border(1.dp, Color.White.copy(alpha = .22f), RoundedCornerShape(28.dp)), contentAlignment = Alignment.Center) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(42.dp))
-            Text("RED+", color = Color.White, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black)
-        }
+    Box(
+        modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color.Black)
+            .border(1.dp, Color.White.copy(alpha = .10f), RoundedCornerShape(18.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        Image(
+            painter = painterResource(R.drawable.redplus_logo),
+            contentDescription = "RedPlus IPTV",
+            modifier = Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 3.dp),
+            contentScale = ContentScale.Fit
+        )
     }
 }
 

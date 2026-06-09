@@ -165,7 +165,6 @@ fun DashboardScreen(session: Session, container: AppContainer, navigate: (String
     LazyColumn(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                RedPlusLogo(Modifier.width(94.dp).height(46.dp))
                 Column(Modifier.weight(1f)) {
                     Text("Hi, ${session.username}", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Text("${session.status} • Expiry: ${xtreamExpiryToText(session.expDate)}", color = PremiumMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
