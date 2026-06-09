@@ -1,6 +1,10 @@
 package com.redplus.iptv.ui
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
+
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -11,6 +15,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.redplus.iptv.data.AppContainer
+import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.Session
 import com.redplus.iptv.player.PlayerScreen
 import com.redplus.iptv.ui.theme.RedPlusTheme
@@ -19,6 +24,11 @@ import com.redplus.iptv.ui.theme.RedPlusTheme
 fun RedPlusApp(container: AppContainer) {
     RedPlusTheme {
         val stored by container.sessionStore.session.collectAsStateWithLifecycle(initialValue = null)
+        val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
+        val activity = LocalContext.current as? Activity
+        LaunchedEffect(settings.forceLandscapeApp) {
+            activity?.requestedOrientation = if (settings.forceLandscapeApp) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
         var activeSession by remember { mutableStateOf<Session?>(null) }
         LaunchedEffect(stored) { if (stored != null) activeSession = stored }
         val session = activeSession

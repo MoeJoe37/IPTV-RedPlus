@@ -55,7 +55,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.redplus.iptv.data.AppContainer
 import com.redplus.iptv.data.local.FavoriteEntity
 import com.redplus.iptv.data.local.WatchHistoryEntity
+import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.CategoryItem
+import com.redplus.iptv.data.model.ContentLoadingStrategy
 import com.redplus.iptv.data.model.ContentItem
 import com.redplus.iptv.data.model.ContentType
 import com.redplus.iptv.data.model.Session
@@ -235,6 +237,7 @@ fun LiveTvScreen(session: Session, container: AppContainer, navigate: (String) -
     var refresh by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     val favs by container.libraryRepository.favoritesByType(session.accountKey, ContentType.LIVE).collectAsStateWithLifecycle(emptyList())
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
     val categoriesState by rememberLoadState(session.accountKey, refresh) { container.contentRepository.liveCategories(session, refresh > 0) }
     val streamsState by rememberLoadState(session.accountKey, selectedCategory, refresh) { container.contentRepository.liveStreams(session, selectedCategory, refresh > 0) }
 
@@ -244,8 +247,8 @@ fun LiveTvScreen(session: Session, container: AppContainer, navigate: (String) -
             streamsState is LoadState.Loading -> LoadingState("Loading channels...")
             streamsState is LoadState.Error -> ErrorState((streamsState as LoadState.Error).message, (streamsState as LoadState.Error).detail, { refresh++ }, onBack)
             categoriesState is LoadState.Data && streamsState is LoadState.Data -> {
-                val categories = listOf("all" to "All") + (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to it.name }
-                val streams = (streamsState as LoadState.Data<List<ContentItem>>).value.filter { query.isBlank() || it.title.containsNormalized(query) }
+                val categories = listOf("all" to "All") + (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to repairText(it.name, settings.useUtf8Decode) }
+                val streams = (streamsState as LoadState.Data<List<ContentItem>>).value.map { it.repairText(settings.useUtf8Decode) }.filter { query.isBlank() || it.title.containsNormalized(query) }
                 if (selected == null && streams.isNotEmpty()) selected = streams.first()
                 BoxWithConstraints(Modifier.fillMaxSize()) {
                     if (maxWidth < 700.dp) {
@@ -389,8 +392,20 @@ private fun CatalogScreen(title: String, session: Session, container: AppContain
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf("A-Z") }
     var refresh by remember { mutableIntStateOf(0) }
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
+    val runtimeSection = settings.contentLoadingStrategy == ContentLoadingStrategy.RUNTIME && if (movies) settings.useRuntimeMovies else settings.useRuntimeSeries
+    val categoryToLoad = if (runtimeSection && selectedCategory == "all") "__empty__" else selectedCategory
     val categoriesState by rememberLoadState(session.accountKey, movies, refresh) { if (movies) container.contentRepository.vodCategories(session, refresh > 0) else container.contentRepository.seriesCategories(session, refresh > 0) }
-    val itemsState by rememberLoadState(session.accountKey, movies, selectedCategory, refresh) { if (movies) container.contentRepository.vodStreams(session, selectedCategory, refresh > 0) else container.contentRepository.series(session, selectedCategory, refresh > 0) }
+    val itemsState by rememberLoadState(session.accountKey, movies, categoryToLoad, refresh) {
+        if (categoryToLoad == "__empty__") emptyList()
+        else if (movies) container.contentRepository.vodStreams(session, categoryToLoad, refresh > 0) else container.contentRepository.series(session, categoryToLoad, refresh > 0)
+    }
+    LaunchedEffect(categoriesState, runtimeSection) {
+        if (runtimeSection && selectedCategory == "all" && categoriesState is LoadState.Data) {
+            val first = (categoriesState as LoadState.Data<List<CategoryItem>>).value.firstOrNull()?.id
+            if (!first.isNullOrBlank()) selectedCategory = first
+        }
+    }
 
     ContentChrome(title, onBack, onRefresh = { refresh++ }) {
         when {
@@ -398,8 +413,9 @@ private fun CatalogScreen(title: String, session: Session, container: AppContain
             categoriesState is LoadState.Error -> ErrorState((categoriesState as LoadState.Error).message, (categoriesState as LoadState.Error).detail, { refresh++ }, onBack)
             itemsState is LoadState.Error -> ErrorState((itemsState as LoadState.Error).message, (itemsState as LoadState.Error).detail, { refresh++ }, onBack)
             else -> {
-                val categories = listOf("all" to "All") + (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to it.name }
-                var filtered = (itemsState as LoadState.Data<List<ContentItem>>).value.filter { query.isBlank() || it.title.containsNormalized(query) }
+                val baseCategories = (categoriesState as LoadState.Data<List<CategoryItem>>).value.map { it.id to repairText(it.name, settings.useUtf8Decode) }
+                val categories = if (runtimeSection) baseCategories else listOf("all" to "All") + baseCategories
+                var filtered = (itemsState as LoadState.Data<List<ContentItem>>).value.map { it.repairText(settings.useUtf8Decode) }.filter { query.isBlank() || it.title.containsNormalized(query) }
                 filtered = when (sort) {
                     "Year" -> filtered.sortedByDescending { it.year }
                     "Rating" -> filtered.sortedByDescending { it.rating }
@@ -599,19 +615,28 @@ fun GlobalSearchScreen(session: Session, container: AppContainer, navigate: (Str
 @Composable
 fun EpgScreen(session: Session, container: AppContainer, onBack: () -> Unit) {
     val item = SharedSelection.item ?: return ErrorState("No channel selected.", onBack = onBack)
-    val state by rememberLoadState(session.accountKey, item.id) { container.contentRepository.epg(session, item.id, 20) }
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
+    val state by rememberLoadState(session.accountKey, item.id, settings.liveTvEpg, settings.externalXmlTvUrl) { container.contentRepository.timeline(session, item, settings, 30) }
     ContentChrome("EPG", onBack) {
         when (state) {
             LoadState.Loading -> LoadingState("Loading guide...")
             is LoadState.Error -> ErrorState((state as LoadState.Error).message, (state as LoadState.Error).detail, onBack = onBack)
             is LoadState.Data -> {
-                val rows = (state as LoadState.Data<com.redplus.iptv.data.remote.EpgResponse>).value.listings.orEmpty()
+                val rows = (state as LoadState.Data<List<com.redplus.iptv.data.model.EpgProgram>>).value
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
-                    item { Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold) }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(item.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(if (settings.liveTvEpg) "Source: provider Xtream EPG or optional XMLTV URL" else "Live TV EPG is disabled in Settings > Runtimes", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (rows.isEmpty()) {
+                        item { SettingsSection("No schedule found", listOf("This provider did not return EPG for this channel, or the optional XMLTV feed could not match its channel name/EPG ID.")) }
+                    }
                     items(rows) { epg ->
                         GlassPanel(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("${unixToLocalTime(epg.startTimestamp)} - ${unixToLocalTime(epg.stopTimestamp)}", color = PremiumRed, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                                Text("${unixToLocalTime(epg.startTimestamp)} - ${unixToLocalTime(epg.stopTimestamp)} • ${epg.source}", color = PremiumRed, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
                                 Text(epg.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Text(epg.description.ifBlank { "No description." }, color = PremiumMuted, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             }
@@ -626,21 +651,82 @@ fun EpgScreen(session: Session, container: AppContainer, onBack: () -> Unit) {
 @Composable
 fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val settings by container.sessionStore.appSettings.collectAsStateWithLifecycle(initialValue = AppSettings())
+    var tab by remember { mutableIntStateOf(0) }
+    fun save(next: AppSettings) { scope.launch { container.sessionStore.updateSettings(next) } }
+
     ContentChrome("Settings", onBack) {
-        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
-            item { SettingsSection("Account", listOf("Server: ${session.serverUrl}", "Username: ${session.username}", "Status: ${session.status}", "Expiry: ${xtreamExpiryToText(session.expDate)}")) }
-            item { SettingsSection("Player", listOf("Resize mode: Fit / Fill / Zoom / Stretch", "HTTP and HTTPS streams supported", "Audio/subtitle tracks show when provided by the stream", "Brightness and volume gestures enabled")) }
-            item { SettingsSection("UI", listOf("Compact phone layout", "Dark glass panels", "Fast lazy lists and cached metadata")) }
-            item { SettingsSection("Data", listOf("Cache is local", "Favorites and history are stored per account")) }
-            item {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { scope.launch { container.libraryRepository.clearCache() } }, modifier = Modifier.fillMaxWidth()) { Text("Clear cache") }
-                    Button(onClick = { scope.launch { container.libraryRepository.clearFavorites(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear favorites") }
-                    Button(onClick = { scope.launch { container.libraryRepository.clearHistory(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear history") }
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            TabRow(selectedTabIndex = tab) {
+                listOf("Account", "Subtitles", "Player", "Runtimes").forEachIndexed { index, title ->
+                    Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
-            item { Button(onClick = { scope.launch { container.authRepository.logout(); onLogout() } }, modifier = Modifier.fillMaxWidth()) { Text("Logout / Clear saved account") } }
-            item { Text("RedPlus IPTV v1.0.1 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
+            LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
+                when (tab) {
+                    0 -> {
+                        item { SettingsSection("Account", listOf("Server: ${session.serverUrl}", "Username: ${session.username}", "Status: ${session.status}", "Expiry: ${xtreamExpiryToText(session.expDate)}")) }
+                        item { SettingsSection("Data", listOf("Cache is local", "Favorites and history are stored per account", "No IPTV links or playlists are bundled with this app")) }
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(onClick = { scope.launch { container.libraryRepository.clearCache() } }, modifier = Modifier.fillMaxWidth()) { Text("Clear cache") }
+                                Button(onClick = { scope.launch { container.libraryRepository.clearFavorites(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear favorites") }
+                                Button(onClick = { scope.launch { container.libraryRepository.clearHistory(session.accountKey) } }, modifier = Modifier.fillMaxWidth()) { Text("Clear history") }
+                                Button(onClick = { scope.launch { container.authRepository.logout(); onLogout() } }, modifier = Modifier.fillMaxWidth()) { Text("Logout / Clear saved account") }
+                            }
+                        }
+                        item { Text("RedPlus IPTV v1.1.0 • Legal player only. No content, playlists, or IPTV sources are included.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
+                    }
+                    1 -> {
+                        item {
+                            SettingsPanel("Subtitles") {
+                                SettingsCheckboxRow("Enable subtitles", settings.subtitlesEnabled) { save(settings.copy(subtitlesEnabled = it)) }
+                                SettingsDropdown("Subtitle language", settings.preferredSubtitleLanguage, listOf("auto", "off", "en", "ar", "fr", "es", "de", "tr")) { save(settings.copy(preferredSubtitleLanguage = it, subtitlesEnabled = it != "off")) }
+                                OutlinedTextField(
+                                    value = settings.externalSubtitleUrl,
+                                    onValueChange = { save(settings.copy(externalSubtitleUrl = it)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    label = { Text("External subtitle URL (.srt/.vtt/.ass)") }
+                                )
+                                Text("Player Options also lets the user switch embedded subtitle tracks while watching.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    2 -> {
+                        item {
+                            SettingsPanel("Playback") {
+                                SettingsCheckboxRow("Always start the whole app horizontally", settings.forceLandscapeApp) { save(settings.copy(forceLandscapeApp = it)) }
+                                SettingsCheckboxRow("Use external Live TV player", settings.useExternalLivePlayer) { save(settings.copy(useExternalLivePlayer = it)) }
+                                SettingsCheckboxRow("Use external VOD/Series player", settings.useExternalVodPlayer) { save(settings.copy(useExternalVodPlayer = it)) }
+                                Text("When external player is enabled, Android opens a player chooser for that stream type. Internal playback remains available by turning it off.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                    else -> {
+                        item {
+                            SettingsPanel("Runtimes") {
+                                SettingsCheckboxRow("Stream URL redirection check", settings.streamUrlRedirectionCheck) { save(settings.copy(streamUrlRedirectionCheck = it)) }
+                                SettingsCheckboxRow("Live TV EPG", settings.liveTvEpg) { save(settings.copy(liveTvEpg = it)) }
+                                SettingsCheckboxRow("Use extension in stream URL", settings.useExtensionInStreamUrl) { save(settings.copy(useExtensionInStreamUrl = it)) }
+                                SettingsCheckboxRow("Use m3u8 format in Live TV stream URL", settings.useM3uFormatInStreamUrl) { save(settings.copy(useM3uFormatInStreamUrl = it)) }
+                                SettingsCheckboxRow("Use runtime function in Movies section", settings.useRuntimeMovies) { save(settings.copy(useRuntimeMovies = it)) }
+                                SettingsCheckboxRow("Use runtime function in Series section", settings.useRuntimeSeries) { save(settings.copy(useRuntimeSeries = it)) }
+                                SettingsCheckboxRow("Use UTF-8 decode / text repair", settings.useUtf8Decode) { save(settings.copy(useUtf8Decode = it)) }
+                                SettingsDropdown("Content loading strategy", settings.contentLoadingStrategy.name, ContentLoadingStrategy.entries.map { it.name }) { save(settings.copy(contentLoadingStrategy = ContentLoadingStrategy.valueOf(it))) }
+                                OutlinedTextField(
+                                    value = settings.externalXmlTvUrl,
+                                    onValueChange = { save(settings.copy(externalXmlTvUrl = it)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    label = { Text("Optional XMLTV EPG URL") }
+                                )
+                                Text("For schedule data, the app first uses the provider Xtream EPG. If you enter a legal XMLTV feed URL, it tries to match channel names/EPG IDs and show that timeline.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -651,6 +737,38 @@ private fun SettingsSection(title: String, lines: List<String>) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             lines.forEach { Text(it, color = PremiumMuted, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPanel(title: String, content: @Composable () -> Unit) {
+    GlassPanel(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsCheckboxRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun SettingsDropdown(label: String, value: String, values: List<String>, onChange: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+        Button(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) { Text(values.firstOrNull { it == value } ?: value) }
+        DropdownMenu(open, { open = false }) {
+            values.forEach { option ->
+                DropdownMenuItem(text = { Text(option) }, onClick = { onChange(option); open = false })
+            }
         }
     }
 }
@@ -669,3 +787,19 @@ private fun ContentChrome(title: String, onBack: () -> Unit, onRefresh: (() -> U
 
 private fun FavoriteEntity.toItem(): ContentItem = ContentItem(itemId, runCatching { ContentType.valueOf(contentType) }.getOrDefault(ContentType.LIVE), title, image, categoryId, streamExtension = streamExtension)
 private fun WatchHistoryEntity.toItem(): ContentItem = ContentItem(itemId, runCatching { ContentType.valueOf(contentType) }.getOrDefault(ContentType.LIVE), title, image, categoryId, streamExtension = streamExtension)
+
+private fun ContentItem.repairText(enabled: Boolean): ContentItem = if (!enabled) this else copy(
+    title = repairText(title, true),
+    genre = genre?.let { repairText(it, true) },
+    plot = plot?.let { repairText(it, true) },
+    year = year?.let { repairText(it, true) },
+    rating = rating?.let { repairText(it, true) }
+)
+
+private fun repairText(value: String, enabled: Boolean): String {
+    if (!enabled || value.isBlank()) return value
+    val repaired = runCatching { String(value.toByteArray(Charsets.ISO_8859_1), Charsets.UTF_8) }.getOrDefault(value)
+    val originalBadness = value.count { it == 'Ã' || it == 'Ø' || it == 'Ù' || it == '�' }
+    val repairedBadness = repaired.count { it == 'Ã' || it == 'Ø' || it == 'Ù' || it == '�' }
+    return if (repaired.isNotBlank() && repairedBadness < originalBadness) repaired else value
+}

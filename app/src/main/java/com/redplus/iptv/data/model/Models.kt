@@ -32,7 +32,8 @@ data class ContentItem(
     val plot: String? = null,
     val streamExtension: String? = null,
     val channelNumber: Int? = null,
-    val directSource: String? = null
+    val directSource: String? = null,
+    val epgChannelId: String? = null
 )
 
 data class CategoryItem(val id: String, val name: String)
@@ -48,7 +49,7 @@ fun CategoryDto.toCategoryItem(): CategoryItem = CategoryItem(id = categoryId.or
 
 fun LiveStreamDto.toContentItem(type: ContentType = ContentType.LIVE): ContentItem = ContentItem(
     id = streamId?.toString().orEmpty(), type = type, title = name.orEmpty().ifBlank { "Untitled Channel" },
-    image = streamIcon, categoryId = categoryId, channelNumber = num, directSource = directSource
+    image = streamIcon, categoryId = categoryId, channelNumber = num, directSource = directSource, epgChannelId = epgChannelId
 )
 
 fun VodStreamDto.toContentItem(): ContentItem = ContentItem(
@@ -59,4 +60,12 @@ fun VodStreamDto.toContentItem(): ContentItem = ContentItem(
 fun SeriesDto.toContentItem(): ContentItem = ContentItem(
     id = seriesId?.toString().orEmpty(), type = ContentType.SERIES, title = name.orEmpty().ifBlank { "Untitled Series" },
     image = cover, categoryId = categoryId, year = releaseDate?.take(4), rating = rating, genre = genre, plot = plot
+)
+
+data class EpgProgram(
+    val title: String,
+    val description: String = "",
+    val startTimestamp: Long? = null,
+    val stopTimestamp: Long? = null,
+    val source: String = "Xtream"
 )

@@ -140,3 +140,27 @@ This package includes the phone-focused UI and playback fix update:
 - Fixed dark text on dark background by forcing premium light text as the app content color.
 
 If you update from an older test APK and still see old cached data, open Settings and press **Clear cache**, or uninstall the older APK once before installing this version.
+
+## Version 1.1.0 update
+
+This build adds the requested player/runtime controls:
+
+- Player Options button with subtitle selection while watching.
+- Embedded subtitle enable/disable and preferred subtitle language.
+- External sidecar subtitle URL support for `.srt`, `.vtt`, `.ass`, and `.ssa` links.
+- Rotate/sideways button inside the player.
+- Setting to force the whole app to start in landscape.
+- Optional external Live TV player launcher.
+- Optional external VOD/Series player launcher.
+- Settings > Runtimes tab with working switches for:
+  - stream URL redirection check,
+  - Live TV EPG,
+  - extension/no-extension stream URLs,
+  - m3u8 live stream URL fallback,
+  - runtime loading for Movies,
+  - runtime loading for Series,
+  - UTF-8 text repair,
+  - runtime vs all-at-once content loading strategy.
+- EPG timeline now uses the provider Xtream EPG first. You can optionally enter a legal XMLTV EPG feed URL in Settings > Runtimes; the app will try to match channel names/EPG IDs and show the schedule in the player and EPG screen.
+
+No IPTV links, playlists, channels, or copyrighted content are included in this project. Users must provide their own legal Xtream account and, if used, their own legal XMLTV EPG URL.
