@@ -66,14 +66,48 @@ The app calls the Xtream Codes `player_api.php` endpoint to validate the account
 
 ## Common troubleshooting
 
-### Build fails because Java is missing
+#
+
+## Network route settings
+
+Settings > Network adds optional routing helpers:
+
+- Direct connection
+- Auto fastest DNS
+- Cloudflare 1.1.1.1 DNS
+- Google Public DNS
+- Quad9 DNS
+- AdGuard DNS
+- Manual HTTP proxy
+- Manual SOCKS proxy
+
+The app does not bundle unknown public proxy lists. Built-in DNS modes use DNS-over-HTTPS for Xtream API calls and the Media3 Live TV player. VOD/Series playback uses LibVLC for better audio codec support; LibVLC receives the manual HTTP proxy option when configured. A full-device VPN, such as Cloudflare WARP, must be installed as its own Android VPN app because Android VPN connections require the Android VpnService flow and user consent.
+
+## Build fails because Java is missing
 Install JDK 17+ or Android Studio, then restart the terminal or run `BUILD.bat` again. If `winget` is available, this command installs Microsoft OpenJDK 17:
 
 ```bat
 winget install Microsoft.OpenJDK.17
 ```
 
-### Build previously failed with `SDK location not found`
+#
+
+## Network route settings
+
+Settings > Network adds optional routing helpers:
+
+- Direct connection
+- Auto fastest DNS
+- Cloudflare 1.1.1.1 DNS
+- Google Public DNS
+- Quad9 DNS
+- AdGuard DNS
+- Manual HTTP proxy
+- Manual SOCKS proxy
+
+The app does not bundle unknown public proxy lists. Built-in DNS modes use DNS-over-HTTPS for Xtream API calls and the Media3 Live TV player. VOD/Series playback uses LibVLC for better audio codec support; LibVLC receives the manual HTTP proxy option when configured. A full-device VPN, such as Cloudflare WARP, must be installed as its own Android VPN app because Android VPN connections require the Android VpnService flow and user consent.
+
+## Build previously failed with `SDK location not found`
 This ZIP includes `scripts\prepare_android_sdk.ps1`. `BUILD.bat` runs it before Gradle, creates `local.properties`, and prepares a project-local `.android-sdk` folder when no Android SDK is already configured.
 
 ### Android SDK download fails
@@ -182,6 +216,23 @@ This build adds the requested phone/player refinements:
 - Settings include category customization: hide categories or assign the same group name to multiple categories to merge them into one menu entry.
 
 
+
+
+
+## Network route settings
+
+Settings > Network adds optional routing helpers:
+
+- Direct connection
+- Auto fastest DNS
+- Cloudflare 1.1.1.1 DNS
+- Google Public DNS
+- Quad9 DNS
+- AdGuard DNS
+- Manual HTTP proxy
+- Manual SOCKS proxy
+
+The app does not bundle unknown public proxy lists. Built-in DNS modes use DNS-over-HTTPS for Xtream API calls and the Media3 Live TV player. VOD/Series playback uses LibVLC for better audio codec support; LibVLC receives the manual HTTP proxy option when configured. A full-device VPN, such as Cloudflare WARP, must be installed as its own Android VPN app because Android VPN connections require the Android VpnService flow and user consent.
 
 ## Build cache update
 

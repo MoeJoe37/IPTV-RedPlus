@@ -31,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -58,6 +59,7 @@ import com.redplus.iptv.data.local.WatchHistoryEntity
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.CategoryItem
 import com.redplus.iptv.data.model.ContentLoadingStrategy
+import com.redplus.iptv.data.model.NetworkRouteMode
 import com.redplus.iptv.data.model.ContentItem
 import com.redplus.iptv.data.model.ContentType
 import com.redplus.iptv.data.model.Session
@@ -726,12 +728,12 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
 
     ContentChrome("Settings", onBack) {
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            TabRow(selectedTabIndex = tab) {
-                listOf("Account", "Subtitles", "Player", "Runtimes", "Categories").forEachIndexed { index, title ->
+            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
+                listOf("Account", "Subtitles", "Player", "Runtimes", "Network", "Categories").forEachIndexed { index, title ->
                     Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) })
                 }
             }
-            if (tab == 4) {
+            if (tab == 5) {
                 CategoryCustomizationPanel(session, container, settings, ::save, Modifier.weight(1f))
             } else {
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 24.dp)) {
@@ -799,6 +801,31 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                                         label = { Text("Optional XMLTV EPG URL") }
                                     )
                                     Text("For schedule data, the app first uses the provider Xtream EPG. If you enter a legal XMLTV feed URL, it tries to match channel names/EPG IDs and show that timeline.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                        4 -> {
+                            item {
+                                SettingsPanel("Network route") {
+                                    SettingsDropdown(
+                                        "Connection mode",
+                                        settings.networkRouteMode.name,
+                                        NetworkRouteMode.entries.map { it.name }
+                                    ) { selected ->
+                                        save(settings.copy(networkRouteMode = NetworkRouteMode.valueOf(selected)))
+                                    }
+                                    SettingsCheckboxRow("Auto-switch to the fastest available DNS route", settings.autoNetworkSwitch) { save(settings.copy(autoNetworkSwitch = it)) }
+                                    OutlinedTextField(
+                                        value = settings.manualProxyHost,
+                                        onValueChange = { save(settings.copy(manualProxyHost = it.trim())) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        label = { Text("Manual proxy host") }
+                                    )
+                                    SettingsNumberField("Manual proxy port", settings.manualProxyPort.coerceIn(0, 65535), 0, 65535) { save(settings.copy(manualProxyPort = it.coerceIn(0, 65535))) }
+                                    Text("Active route: ${container.xtreamClient.currentRouteLabel()}", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                    Text("1.1.1.1 is DNS, not a full VPN inside this app. The built-in DNS modes apply to Xtream API requests and the Media3 Live TV player. VOD uses LibVLC for audio compatibility; manual HTTP proxy is passed to LibVLC, but DNS-over-HTTPS routing is not available inside LibVLC.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
+                                    Text("No unknown public proxy list is bundled because open proxies are usually unstable and unsafe. You can enter a proxy you trust manually.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }
@@ -1008,11 +1035,11 @@ private fun SettingsCheckboxRow(label: String, checked: Boolean, onChange: (Bool
 }
 
 @Composable
-private fun SettingsNumberField(label: String, value: Int, onChange: (Int) -> Unit) {
+private fun SettingsNumberField(label: String, value: Int, min: Int = 1, max: Int = 600, onChange: (Int) -> Unit) {
     OutlinedTextField(
         value = value.toString(),
         onValueChange = { raw ->
-            raw.filter { it.isDigit() }.toIntOrNull()?.coerceIn(1, 600)?.let(onChange)
+            raw.filter { it.isDigit() }.toIntOrNull()?.coerceIn(min, max)?.let(onChange)
         },
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,

@@ -77,8 +77,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -89,6 +88,7 @@ import com.redplus.iptv.data.AppContainer
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.ContentItem
 import com.redplus.iptv.data.model.ContentType
+import com.redplus.iptv.data.model.NetworkRouteMode
 import com.redplus.iptv.data.model.EpgProgram
 import com.redplus.iptv.data.model.Session
 import com.redplus.iptv.ui.ErrorState
@@ -198,7 +198,7 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
     var vlcAudioChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-2, "Auto / current"))) }
     var vlcSubtitleChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-1, "Off", off = true))) }
     val vlcLayout = remember { VLCVideoLayout(context) }
-    val vlcOptions = remember {
+    val vlcOptions = remember(settings.networkRouteMode, settings.manualProxyHost, settings.manualProxyPort) {
         arrayListOf(
             "--aout=opensles",
             "--audio-time-stretch",
@@ -206,7 +206,13 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
             "--http-reconnect",
             "--no-drop-late-frames",
             "--no-skip-frames"
-        )
+        ).apply {
+            val proxyHost = settings.manualProxyHost.trim()
+            val proxyPort = settings.manualProxyPort.coerceIn(0, 65535)
+            if (settings.networkRouteMode == NetworkRouteMode.MANUAL_HTTP_PROXY && proxyHost.isNotBlank() && proxyPort > 0) {
+                add("--http-proxy=http://$proxyHost:$proxyPort")
+            }
+        }
     }
     val libVlc = remember(streamUrl) { LibVLC(context, vlcOptions) }
     val vlcPlayer = remember(streamUrl) { VlcMediaPlayer(libVlc) }
@@ -256,6 +262,11 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
             addOption(":audio-time-stretch")
             addOption(":codec=all")
             addOption(":avcodec-fast")
+            val proxyHost = settings.manualProxyHost.trim()
+            val proxyPort = settings.manualProxyPort.coerceIn(0, 65535)
+            if (settings.networkRouteMode == NetworkRouteMode.MANUAL_HTTP_PROXY && proxyHost.isNotBlank() && proxyPort > 0) {
+                addOption(":http-proxy=http://$proxyHost:$proxyPort")
+            }
         }
         vlcPlayer.media = media
         media.release()
@@ -558,12 +569,8 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
     }
 
     val player = remember(streamUrl, mediaItem) {
-        val httpFactory = DefaultHttpDataSource.Factory()
+        val dataSourceFactory = OkHttpDataSource.Factory(container.xtreamClient.mediaOkHttpClient())
             .setUserAgent("RedPlusIPTV/1.3")
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(30_000)
-        val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         val renderersFactory = DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER)

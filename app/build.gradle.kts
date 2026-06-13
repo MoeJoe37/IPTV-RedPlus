@@ -13,8 +13,8 @@ android {
         applicationId = "com.redplus.iptv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.3.2"
+        versionCode = 8
+        versionName = "1.3.3"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -61,6 +61,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
 
@@ -68,6 +69,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-exoplayer-dash:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     // LibVLC is used for VOD/series playback because many IPTV VOD files use AC3/EAC3/DTS audio
     // that some Android devices do not expose through MediaCodec/Media3.

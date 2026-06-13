@@ -11,6 +11,8 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.ContentLoadingStrategy
+import com.redplus.iptv.data.model.NetworkRouteMode
+import com.redplus.iptv.data.remote.NetworkRouteState
 import com.redplus.iptv.data.model.Session
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -37,7 +39,7 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
     }
 
     val appSettings: Flow<AppSettings> = context.sessionDataStore.data.map { prefs ->
-        AppSettings(
+        val parsed = AppSettings(
             subtitlesEnabled = prefs[Keys.SUBTITLES_ENABLED] ?: true,
             preferredSubtitleLanguage = prefs[Keys.PREFERRED_SUBTITLE_LANGUAGE] ?: "auto",
             externalSubtitleUrl = prefs[Keys.EXTERNAL_SUBTITLE_URL] ?: "",
@@ -57,9 +59,15 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             showTimeSkipButtons = prefs[Keys.SHOW_TIME_SKIP_BUTTONS] ?: false,
             forwardSkipSeconds = (prefs[Keys.FORWARD_SKIP_SECONDS] ?: 5).coerceIn(1, 600),
             rewindSkipSeconds = (prefs[Keys.REWIND_SKIP_SECONDS] ?: 5).coerceIn(1, 600),
+            networkRouteMode = runCatching { NetworkRouteMode.valueOf(prefs[Keys.NETWORK_ROUTE_MODE] ?: NetworkRouteMode.DIRECT.name) }.getOrDefault(NetworkRouteMode.DIRECT),
+            autoNetworkSwitch = prefs[Keys.AUTO_NETWORK_SWITCH] ?: false,
+            manualProxyHost = prefs[Keys.MANUAL_PROXY_HOST] ?: "",
+            manualProxyPort = (prefs[Keys.MANUAL_PROXY_PORT] ?: 0).coerceIn(0, 65535),
             hiddenCategoryKeys = decodeSet(prefs[Keys.HIDDEN_CATEGORY_KEYS]),
             categoryGroupMap = decodeMap(prefs[Keys.CATEGORY_GROUP_MAP])
         )
+        NetworkRouteState.settings = parsed
+        parsed
     }
 
     suspend fun save(session: Session, remember: Boolean) {
@@ -100,6 +108,11 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
             prefs[Keys.SHOW_TIME_SKIP_BUTTONS] = settings.showTimeSkipButtons
             prefs[Keys.FORWARD_SKIP_SECONDS] = settings.forwardSkipSeconds.coerceIn(1, 600)
             prefs[Keys.REWIND_SKIP_SECONDS] = settings.rewindSkipSeconds.coerceIn(1, 600)
+            prefs[Keys.NETWORK_ROUTE_MODE] = settings.networkRouteMode.name
+            prefs[Keys.AUTO_NETWORK_SWITCH] = settings.autoNetworkSwitch
+            prefs[Keys.MANUAL_PROXY_HOST] = settings.manualProxyHost
+            prefs[Keys.MANUAL_PROXY_PORT] = settings.manualProxyPort.coerceIn(0, 65535)
+            NetworkRouteState.settings = settings
             prefs[Keys.HIDDEN_CATEGORY_KEYS] = encodeSet(settings.hiddenCategoryKeys)
             prefs[Keys.CATEGORY_GROUP_MAP] = encodeMap(settings.categoryGroupMap)
         }
@@ -160,6 +173,10 @@ class SessionStore(private val context: Context, private val cryptoManager: Cryp
         val SHOW_TIME_SKIP_BUTTONS = booleanPreferencesKey("show_time_skip_buttons")
         val FORWARD_SKIP_SECONDS = intPreferencesKey("forward_skip_seconds")
         val REWIND_SKIP_SECONDS = intPreferencesKey("rewind_skip_seconds")
+        val NETWORK_ROUTE_MODE = stringPreferencesKey("network_route_mode")
+        val AUTO_NETWORK_SWITCH = booleanPreferencesKey("auto_network_switch")
+        val MANUAL_PROXY_HOST = stringPreferencesKey("manual_proxy_host")
+        val MANUAL_PROXY_PORT = intPreferencesKey("manual_proxy_port")
         val HIDDEN_CATEGORY_KEYS = stringPreferencesKey("hidden_category_keys")
         val CATEGORY_GROUP_MAP = stringPreferencesKey("category_group_map")
     }
