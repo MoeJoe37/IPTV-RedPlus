@@ -263,12 +263,25 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         PlayerCommandBus.commands.collectLatest { command ->
             when (command) {
                 PlayerPipCommand.AudioOnly -> {
-                    viewMode = PlayerViewMode.AudioOnly
+                    AudioOnlyPlaybackService.start(context, streamUrl, item, isVod = true, positionMs = runCatching { vlcPlayer.time }.getOrDefault(position))
+                    runCatching { vlcPlayer.pause() }
                     overlay = false
-                    runCatching { vlcPlayer.detachViews() }
+                    activity?.finish()
                 }
                 PlayerPipCommand.PlayPause -> if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play()
                 PlayerPipCommand.FullScreen -> {
+                    AudioOnlyPlaybackService.stop(context)
+                    viewMode = PlayerViewMode.Full
+                    overlay = true
+                    runCatching { vlcPlayer.attachViews(vlcLayout, null, false, false) }
+                    runCatching { vlcPlayer.play() }
+                }
+                PlayerPipCommand.EnterPip -> {
+                    viewMode = PlayerViewMode.Full
+                    overlay = false
+                    runCatching { vlcPlayer.attachViews(vlcLayout, null, false, false) }
+                }
+                PlayerPipCommand.ExitPip -> {
                     viewMode = PlayerViewMode.Full
                     overlay = true
                     runCatching { vlcPlayer.attachViews(vlcLayout, null, false, false) }
@@ -361,8 +374,15 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         }
     }
 
-    LaunchedEffect(isPlaying, activity) {
+    LaunchedEffect(item, isPlaying, activity) {
+        PlayerCommandBus.activePipState = ActivePipState(item = item, isVod = true, isPlaying = isPlaying)
         activity?.updateRedPlusPipParams(item = item, isVod = true, isPlaying = isPlaying)
+    }
+
+    DisposableEffect(item) {
+        onDispose {
+            if (PlayerCommandBus.activePipState?.item == item) PlayerCommandBus.activePipState = null
+        }
     }
 
     var screenModifier = Modifier.fillMaxSize().background(Color.Black)
@@ -675,12 +695,23 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
         PlayerCommandBus.commands.collectLatest { command ->
             when (command) {
                 PlayerPipCommand.AudioOnly -> {
-                    viewMode = PlayerViewMode.AudioOnly
+                    AudioOnlyPlaybackService.start(context, streamUrl, item, isVod = false, positionMs = player.currentPosition.coerceAtLeast(0L))
+                    player.pause()
                     overlay = false
-                    player.clearVideoSurface()
+                    activity?.finish()
                 }
                 PlayerPipCommand.PlayPause -> if (player.isPlaying) player.pause() else player.play()
                 PlayerPipCommand.FullScreen -> {
+                    AudioOnlyPlaybackService.stop(context)
+                    viewMode = PlayerViewMode.Full
+                    overlay = true
+                    player.play()
+                }
+                PlayerPipCommand.EnterPip -> {
+                    viewMode = PlayerViewMode.Full
+                    overlay = false
+                }
+                PlayerPipCommand.ExitPip -> {
                     viewMode = PlayerViewMode.Full
                     overlay = true
                 }
@@ -758,8 +789,15 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
         }
     }
 
-    LaunchedEffect(isPlaying, activity) {
+    LaunchedEffect(item, isPlaying, activity) {
+        PlayerCommandBus.activePipState = ActivePipState(item = item, isVod = false, isPlaying = isPlaying)
         activity?.updateRedPlusPipParams(item = item, isVod = false, isPlaying = isPlaying)
+    }
+
+    DisposableEffect(item) {
+        onDispose {
+            if (PlayerCommandBus.activePipState?.item == item) PlayerCommandBus.activePipState = null
+        }
     }
 
     var screenModifier = Modifier.fillMaxSize().background(Color.Black)
@@ -1394,7 +1432,7 @@ private enum class PlayerViewMode { Full, Mini, AudioOnly }
 private enum class PlayerOptionsSection { Main, Audio, Subtitles, Quality }
 
 
-private fun Activity.enterRedPlusPip(item: ContentItem, isVod: Boolean, isPlaying: Boolean): Boolean {
+fun Activity.enterRedPlusPip(item: ContentItem, isVod: Boolean, isPlaying: Boolean): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
     if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
     return runCatching {
@@ -1402,12 +1440,12 @@ private fun Activity.enterRedPlusPip(item: ContentItem, isVod: Boolean, isPlayin
     }.getOrDefault(false)
 }
 
-private fun Activity.updateRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean) {
+fun Activity.updateRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isInPictureInPictureMode) return
     runCatching { setPictureInPictureParams(buildRedPlusPipParams(item, isVod, isPlaying)) }
 }
 
-private fun Activity.buildRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean): PictureInPictureParams {
+fun Activity.buildRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean): PictureInPictureParams {
     val builder = PictureInPictureParams.Builder()
         .setAspectRatio(Rational(16, 9))
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1423,19 +1461,24 @@ private fun Activity.buildRedPlusPipParams(item: ContentItem, isVod: Boolean, is
         }
         actions += pipAction(PlayerPipCommand.FullScreen.action, android.R.drawable.ic_menu_view, "Full", "Full screen")
         builder.setActions(actions)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) builder.setTitle(item.title.take(50))
     }
     return builder.build()
 }
 
-private fun Activity.pipAction(action: String, iconRes: Int, title: String, description: String): RemoteAction {
-    val intent = Intent(this, com.redplus.iptv.MainActivity::class.java).apply {
-        this.action = action
-        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-    }
+fun Activity.pipAction(action: String, iconRes: Int, title: String, description: String): RemoteAction {
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-    val pendingIntent = PendingIntent.getActivity(this, action.hashCode(), intent, flags)
+    val pendingIntent = if (action == PlayerPipCommand.FullScreen.action) {
+        val intent = Intent(this, com.redplus.iptv.MainActivity::class.java).apply {
+            this.action = action
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        PendingIntent.getActivity(this, action.hashCode(), intent, flags)
+    } else {
+        val intent = Intent(this, PlayerPipActionReceiver::class.java).apply { this.action = action }
+        PendingIntent.getBroadcast(this, action.hashCode(), intent, flags)
+    }
     return RemoteAction(AndroidIcon.createWithResource(this, iconRes), title, description, pendingIntent)
 }
 

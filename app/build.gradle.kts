@@ -13,8 +13,8 @@ android {
         applicationId = "com.redplus.iptv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.4.1"
+        versionCode = 11
+        versionName = "1.4.2"
         vectorDrawables { useSupportLibrary = true }
     }
 
@@ -70,4 +70,6 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
     implementation("org.videolan.android:libvlc-all:3.6.5")
+
+    implementation("com.github.schwabe:ics-openvpn:v0.6.73-production")
 }

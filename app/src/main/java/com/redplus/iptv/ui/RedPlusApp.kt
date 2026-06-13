@@ -18,6 +18,8 @@ import com.redplus.iptv.data.AppContainer
 import com.redplus.iptv.data.model.AppSettings
 import com.redplus.iptv.data.model.Session
 import com.redplus.iptv.player.PlayerScreen
+import com.redplus.iptv.player.PlayerOpenBus
+import kotlinx.coroutines.flow.collectLatest
 import com.redplus.iptv.ui.theme.RedPlusTheme
 
 @Composable
@@ -45,6 +47,14 @@ fun RedPlusApp(container: AppContainer) {
 @Composable
 private fun MainNavigation(container: AppContainer, session: Session, onLogout: () -> Unit) {
     val nav = rememberNavController()
+    LaunchedEffect(nav) {
+        fun openPlayer(item: com.redplus.iptv.data.model.ContentItem) {
+            SharedSelection.item = item
+            nav.navigate(Routes.Player) { launchSingleTop = true }
+        }
+        PlayerOpenBus.consumePending()?.let(::openPlayer)
+        PlayerOpenBus.openRequests.collectLatest(::openPlayer)
+    }
     NavHost(navController = nav, startDestination = Routes.Dashboard) {
         composable(Routes.Dashboard) { DashboardScreen(session, container, navigate = nav::navigate) }
         composable(Routes.Live) { LiveTvScreen(session, container, navigate = nav::navigate, onBack = { nav.popBackStack() }) }

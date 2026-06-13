@@ -25,8 +25,7 @@ data class VpnGateServer(
 
     fun decodedOpenVpnConfig(): String {
         val decoded = Base64.decode(openVpnConfigBase64.replace("\n", "").replace("\r", ""), Base64.DEFAULT)
-        val config = decoded.toString(Charsets.UTF_8).replace("\r\n", "\n").trimEnd()
-        return if (Regex("(?m)^\\s*auth-user-pass\\b").containsMatchIn(config)) "$config\n" else "$config\nauth-user-pass\n"
+        return decoded.toString(Charsets.UTF_8).replace("\r\n", "\n").trimEnd() + "\n"
     }
 }
 
