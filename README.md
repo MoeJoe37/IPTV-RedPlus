@@ -252,3 +252,8 @@ REDPLUS_ANDROID_SDK_ROOT
 ```
 
 If you want to force a full dependency redownload, close Android Studio/Java/Gradle and delete `%USERPROFILE%\.redplus-iptv\gradle-cache`.
+
+
+## VPN Gate / VpnService support
+
+Settings > Network includes Android VpnService permission support and a VPN Gate profile fetcher. VPN Gate publishes a CSV server list with Base64 OpenVPN profiles. RedPlus can fetch the fastest available profiles and open the `.ovpn` profile in an OpenVPN-compatible app. Android VpnService is declared in the manifest, but VpnService by itself is only the Android TUN interface; a real OpenVPN tunnel also needs an OpenVPN protocol engine.

@@ -1,29 +1,40 @@
 package com.redplus.iptv.player
 
 import android.app.Activity
+import android.app.PendingIntent
+import android.app.PictureInPictureParams
+import android.app.RemoteAction
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ActivityInfo
+import android.graphics.drawable.Icon as AndroidIcon
 import android.media.AudioManager
 import android.net.Uri
+import android.os.Build
+import android.util.Rational
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -58,9 +69,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -103,6 +116,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collectLatest
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer as VlcMediaPlayer
@@ -194,6 +208,7 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
     var brightness by remember { mutableFloatStateOf(-1f) }
     var isPlaying by remember { mutableStateOf(false) }
     var showOptions by remember { mutableStateOf(false) }
+    var viewMode by remember { mutableStateOf(PlayerViewMode.Full) }
     var gestureIndicator by remember { mutableStateOf<GestureIndicator?>(null) }
     var vlcAudioChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-2, "Auto / current"))) }
     var vlcSubtitleChoices by remember { mutableStateOf(listOf(VlcTrackChoice(-1, "Off", off = true))) }
@@ -229,8 +244,37 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         }
     }
 
+    LaunchedEffect(viewMode, activity) {
+        if (viewMode == PlayerViewMode.Full) activity?.enterPlayerFullscreen() else activity?.exitPlayerFullscreen(false)
+    }
+
     BackHandler(enabled = true) {
-        if (!locked) onBack()
+        when {
+            locked -> Unit
+            viewMode != PlayerViewMode.Full -> {
+                viewMode = PlayerViewMode.Full
+                overlay = true
+            }
+            else -> onBack()
+        }
+    }
+
+    LaunchedEffect(vlcPlayer, activity) {
+        PlayerCommandBus.commands.collectLatest { command ->
+            when (command) {
+                PlayerPipCommand.AudioOnly -> {
+                    viewMode = PlayerViewMode.AudioOnly
+                    overlay = false
+                    runCatching { vlcPlayer.detachViews() }
+                }
+                PlayerPipCommand.PlayPause -> if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play()
+                PlayerPipCommand.FullScreen -> {
+                    viewMode = PlayerViewMode.Full
+                    overlay = true
+                    runCatching { vlcPlayer.attachViews(vlcLayout, null, false, false) }
+                }
+            }
+        }
     }
 
     DisposableEffect(streamUrl) {
@@ -282,6 +326,14 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         }
     }
 
+    LaunchedEffect(viewMode, vlcPlayer) {
+        if (viewMode == PlayerViewMode.AudioOnly) {
+            runCatching { vlcPlayer.detachViews() }
+        } else {
+            runCatching { vlcPlayer.attachViews(vlcLayout, null, false, false) }
+        }
+    }
+
     LaunchedEffect(item.id, streamUrl) {
         val history = container.libraryRepository.historyFor(session.accountKey, item)
         if (history != null && history.positionMs > 0) {
@@ -309,11 +361,14 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(locked) {
+    LaunchedEffect(isPlaying, activity) {
+        activity?.updateRedPlusPipParams(item = item, isVod = true, isPlaying = isPlaying)
+    }
+
+    var screenModifier = Modifier.fillMaxSize().background(Color.Black)
+    if (viewMode == PlayerViewMode.Full) {
+        screenModifier = screenModifier
+            .pointerInput(locked, viewMode) {
                 detectTapGestures(
                     onTap = { if (!locked) overlay = !overlay else overlay = true },
                     onDoubleTap = { offset ->
@@ -326,7 +381,7 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
                     }
                 )
             }
-            .pointerInput(locked) {
+            .pointerInput(locked, viewMode) {
                 detectVerticalDragGestures { change, dragAmount ->
                     if (locked) return@detectVerticalDragGestures
                     val isLeft = change.position.x < size.width / 2
@@ -349,10 +404,29 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
                     }
                 }
             }
-    ) {
-        AndroidView(factory = { vlcLayout }, modifier = Modifier.fillMaxSize())
+    }
 
-        if (overlay) {
+    Box(screenModifier) {
+        when (viewMode) {
+            PlayerViewMode.Full -> AndroidView(factory = { vlcLayout }, modifier = Modifier.fillMaxSize())
+            PlayerViewMode.Mini -> FloatingMiniPlayer(
+                item = item,
+                isVod = true,
+                isPlaying = isPlaying,
+                onAudioOnly = { viewMode = PlayerViewMode.AudioOnly },
+                onPlayPause = { if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play() },
+                onFullScreen = { viewMode = PlayerViewMode.Full; overlay = true }
+            ) { AndroidView(factory = { vlcLayout }, modifier = Modifier.fillMaxSize()) }
+            PlayerViewMode.AudioOnly -> AudioOnlyPlayerPanel(
+                item = item,
+                isVod = true,
+                isPlaying = isPlaying,
+                onPlayPause = { if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play() },
+                onFullScreen = { viewMode = PlayerViewMode.Full; overlay = true }
+            )
+        }
+
+        if (viewMode == PlayerViewMode.Full && overlay) {
             MinimalPlayerOverlay(
                 item = item,
                 position = position,
@@ -374,6 +448,7 @@ private fun VlcVodPlayerScreen(session: Session, container: AppContainer, item: 
                 onPlayPause = { if (!locked) { if (vlcPlayer.isPlaying) vlcPlayer.pause() else vlcPlayer.play() } },
                 onSeekBy = { by -> if (!locked && duration > 0) vlcPlayer.time = (position + by).coerceIn(0L, duration) },
                 onSeek = { next -> if (!locked && duration > 0) vlcPlayer.time = next.coerceIn(0L, duration) },
+                onPopOut = { if (!locked) { overlay = false; activity?.enterRedPlusPip(item = item, isVod = true, isPlaying = isPlaying) ?: run { viewMode = PlayerViewMode.Full; overlay = true } } },
                 onRetry = {
                     error = null
                     if (urlIndex < streamUrls.lastIndex) urlIndex += 1 else {
@@ -479,7 +554,6 @@ private fun VlcVodOptionsDialog(
                         streamUrls.forEachIndexed { index, url ->
                             OptionMenuRow(sourceLabel(url, index, index == urlIndex), if (index == urlIndex) "Current Xtream source" else "Switch source") { onSource(index) }
                         }
-                        Text("For VOD, quality/source switching uses the available Xtream URL variants because most VOD files are direct files rather than adaptive live playlists.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -539,6 +613,7 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
     var brightness by remember { mutableFloatStateOf(-1f) }
     var showOptions by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
+    var viewMode by remember { mutableStateOf(PlayerViewMode.Full) }
     var gestureIndicator by remember { mutableStateOf<GestureIndicator?>(null) }
     var subtitleChoices by remember { mutableStateOf(listOf(SubtitleChoice("auto", "Auto", false), SubtitleChoice("off", "Off", true))) }
     var audioChoices by remember { mutableStateOf(listOf(AudioChoice("auto", "Auto"), AudioChoice("off", "Off", off = true))) }
@@ -559,9 +634,19 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
         }
     }
 
+    LaunchedEffect(viewMode, activity) {
+        if (viewMode == PlayerViewMode.Full) activity?.enterPlayerFullscreen() else activity?.exitPlayerFullscreen(false)
+    }
 
     BackHandler(enabled = true) {
-        if (!locked) onBack()
+        when {
+            locked -> Unit
+            viewMode != PlayerViewMode.Full -> {
+                viewMode = PlayerViewMode.Full
+                overlay = true
+            }
+            else -> onBack()
+        }
     }
 
     val mediaItem = remember(streamUrl, settings.externalSubtitleUrl, settings.preferredSubtitleLanguage, settings.subtitlesEnabled) {
@@ -585,6 +670,26 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
                 playWhenReady = true
                 prepare()
             }
+    }
+    LaunchedEffect(player, activity) {
+        PlayerCommandBus.commands.collectLatest { command ->
+            when (command) {
+                PlayerPipCommand.AudioOnly -> {
+                    viewMode = PlayerViewMode.AudioOnly
+                    overlay = false
+                    player.clearVideoSurface()
+                }
+                PlayerPipCommand.PlayPause -> if (player.isPlaying) player.pause() else player.play()
+                PlayerPipCommand.FullScreen -> {
+                    viewMode = PlayerViewMode.Full
+                    overlay = true
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(viewMode, player) {
+        if (viewMode == PlayerViewMode.AudioOnly) player.clearVideoSurface()
     }
 
     DisposableEffect(player, streamUrls, urlIndex) {
@@ -653,11 +758,14 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-            .pointerInput(locked) {
+    LaunchedEffect(isPlaying, activity) {
+        activity?.updateRedPlusPipParams(item = item, isVod = false, isPlaying = isPlaying)
+    }
+
+    var screenModifier = Modifier.fillMaxSize().background(Color.Black)
+    if (viewMode == PlayerViewMode.Full) {
+        screenModifier = screenModifier
+            .pointerInput(locked, viewMode) {
                 detectTapGestures(
                     onTap = { if (!locked) overlay = !overlay else overlay = true },
                     onDoubleTap = { offset ->
@@ -670,7 +778,7 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
                     }
                 )
             }
-            .pointerInput(locked) {
+            .pointerInput(locked, viewMode) {
                 detectVerticalDragGestures { change, dragAmount ->
                     if (locked) return@detectVerticalDragGestures
                     val isLeft = change.position.x < size.width / 2
@@ -693,11 +801,14 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
                     }
                 }
             }
-    ) {
+    }
+
+    @Composable
+    fun Media3View(modifier: Modifier) {
         AndroidView(
             factory = { ctx ->
                 PlayerView(ctx).apply {
-                    keepScreenOn = true
+                    keepScreenOn = viewMode != PlayerViewMode.AudioOnly
                     useController = false
                     this.player = player
                     this.resizeMode = resizeMode.media3
@@ -705,13 +816,35 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
             },
             update = { view ->
                 view.player = player
+                view.keepScreenOn = viewMode != PlayerViewMode.AudioOnly
                 view.resizeMode = resizeMode.media3
                 view.useController = false
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = modifier
         )
+    }
 
-        if (overlay) {
+    Box(screenModifier) {
+        when (viewMode) {
+            PlayerViewMode.Full -> Media3View(Modifier.fillMaxSize())
+            PlayerViewMode.Mini -> FloatingMiniPlayer(
+                item = item,
+                isVod = false,
+                isPlaying = isPlaying,
+                onAudioOnly = { viewMode = PlayerViewMode.AudioOnly },
+                onPlayPause = { },
+                onFullScreen = { viewMode = PlayerViewMode.Full; overlay = true }
+            ) { Media3View(Modifier.fillMaxSize()) }
+            PlayerViewMode.AudioOnly -> AudioOnlyPlayerPanel(
+                item = item,
+                isVod = false,
+                isPlaying = isPlaying,
+                onPlayPause = { },
+                onFullScreen = { viewMode = PlayerViewMode.Full; overlay = true }
+            )
+        }
+
+        if (viewMode == PlayerViewMode.Full && overlay) {
             MinimalPlayerOverlay(
                 item = item,
                 position = position,
@@ -733,6 +866,7 @@ private fun Media3InternalPlayerScreen(session: Session, container: AppContainer
                 onPlayPause = { if (!locked) { if (player.isPlaying) player.pause() else player.play() } },
                 onSeekBy = { by -> if (!locked && player.isCurrentMediaItemSeekable) player.seekTo((player.currentPosition + by).coerceAtLeast(0L)) },
                 onSeek = { next -> if (!locked && player.isCurrentMediaItemSeekable) player.seekTo(next) },
+                onPopOut = { if (!locked) { overlay = false; activity?.enterRedPlusPip(item = item, isVod = false, isPlaying = isPlaying) ?: run { viewMode = PlayerViewMode.Full; overlay = true } } },
                 onRetry = {
                     error = null
                     if (urlIndex < streamUrls.lastIndex) urlIndex += 1 else {
@@ -798,6 +932,7 @@ private fun MinimalPlayerOverlay(
     onPlayPause: () -> Unit,
     onSeekBy: (Long) -> Unit,
     onSeek: (Long) -> Unit,
+    onPopOut: () -> Unit,
     onRetry: () -> Unit
 ) {
     val isVod = item.type != ContentType.LIVE && item.type != ContentType.EVENT
@@ -815,6 +950,10 @@ private fun MinimalPlayerOverlay(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (!locked) {
+                TextButton(
+                    onClick = onPopOut,
+                    modifier = Modifier.background(Color.Black.copy(alpha = .44f), RoundedCornerShape(12.dp))
+                ) { Text("Pop", color = Color.White, style = MaterialTheme.typography.bodySmall) }
                 TextButton(
                     onClick = onRotate,
                     modifier = Modifier.background(Color.Black.copy(alpha = .44f), RoundedCornerShape(12.dp))
@@ -907,6 +1046,86 @@ private fun MinimalPlayerOverlay(
     }
 }
 
+
+@Composable
+private fun FloatingMiniPlayer(
+    item: ContentItem,
+    isVod: Boolean,
+    isPlaying: Boolean,
+    onAudioOnly: () -> Unit,
+    onPlayPause: () -> Unit,
+    onFullScreen: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val density = LocalDensity.current
+    var offsetX by remember { mutableFloatStateOf(24f) }
+    var offsetY by remember { mutableFloatStateOf(64f) }
+    val miniWidth = 172.dp
+    val miniHeight = 286.dp
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val maxX = with(density) { (maxWidth - miniWidth).toPx().coerceAtLeast(0f) }
+        val maxY = with(density) { (maxHeight - miniHeight).toPx().coerceAtLeast(0f) }
+        val shownX = offsetX.coerceIn(0f, maxX)
+        val shownY = offsetY.coerceIn(0f, maxY)
+
+        Column(
+            modifier = Modifier
+                .offset { IntOffset(shownX.roundToInt(), shownY.roundToInt()) }
+                .width(miniWidth)
+                .height(miniHeight)
+                .background(Color.Black.copy(alpha = .82f), RoundedCornerShape(18.dp))
+                .border(BorderStroke(1.dp, Color.White.copy(alpha = .28f)), RoundedCornerShape(18.dp))
+                .pointerInput(maxX, maxY) {
+                    detectDragGestures { _, dragAmount ->
+                        offsetX = (shownX + dragAmount.x).coerceIn(0f, maxX)
+                        offsetY = (shownY + dragAmount.y).coerceIn(0f, maxY)
+                    }
+                }
+                .padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black, RoundedCornerShape(14.dp))) {
+                content()
+            }
+            Text(item.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onAudioOnly) { Text("Audio") }
+                if (isVod) {
+                    IconButton(onClick = onPlayPause, modifier = Modifier.size(42.dp).background(PremiumRed.copy(alpha = .92f), RoundedCornerShape(50))) {
+                        Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = if (isPlaying) "Pause" else "Play", tint = Color.White)
+                    }
+                }
+                TextButton(onClick = onFullScreen) { Text("Full") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioOnlyPlayerPanel(
+    item: ContentItem,
+    isVod: Boolean,
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit,
+    onFullScreen: () -> Unit
+) {
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        GlassPanel(Modifier.fillMaxWidth(.88f)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Audio only", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(item.title, color = PremiumMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (isVod) {
+                        Button(onClick = onPlayPause) { Text(if (isPlaying) "Pause" else "Play") }
+                    }
+                    Button(onClick = onFullScreen) { Text("Full screen") }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun GestureIndicatorView(indicator: GestureIndicator, modifier: Modifier = Modifier) {
     GlassPanel(modifier.width(220.dp)) {
@@ -966,7 +1185,6 @@ private fun PlayerOptionsDialog(
                         audioChoices.take(24).forEach { choice ->
                             OptionMenuRow(choice.label, if (choice.off) "Disable audio" else "Use this audio track") { onAudioChoice(choice) }
                         }
-                        if (audioChoices.size <= 2) Text("No extra audio/dub tracks were exposed by this stream. If a VOD has unsupported AC3/DTS audio, use Open externally with a player that supports that codec.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                     }
                     PlayerOptionsSection.Subtitles -> {
                         subtitleChoices.take(24).forEach { choice ->
@@ -981,7 +1199,6 @@ private fun PlayerOptionsDialog(
                         videoChoices.take(28).forEach { choice ->
                             OptionMenuRow(choice.label, if (choice.sourceIndex != null) "Xtream source URL" else "Adaptive video track") { onVideoChoice(choice) }
                         }
-                        Text("Auto uses adaptive HLS quality when available. Source buttons switch between generated Xtream URL variants such as HLS/m3u8, TS, MP4/default.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -1172,7 +1389,55 @@ private data class VideoChoice(
 
 private data class GestureIndicator(val label: String, val value: Float)
 
+private enum class PlayerViewMode { Full, Mini, AudioOnly }
+
 private enum class PlayerOptionsSection { Main, Audio, Subtitles, Quality }
+
+
+private fun Activity.enterRedPlusPip(item: ContentItem, isVod: Boolean, isPlaying: Boolean): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+    if (!packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) return false
+    return runCatching {
+        enterPictureInPictureMode(buildRedPlusPipParams(item, isVod, isPlaying))
+    }.getOrDefault(false)
+}
+
+private fun Activity.updateRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !isInPictureInPictureMode) return
+    runCatching { setPictureInPictureParams(buildRedPlusPipParams(item, isVod, isPlaying)) }
+}
+
+private fun Activity.buildRedPlusPipParams(item: ContentItem, isVod: Boolean, isPlaying: Boolean): PictureInPictureParams {
+    val builder = PictureInPictureParams.Builder()
+        .setAspectRatio(Rational(16, 9))
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val actions = mutableListOf<RemoteAction>()
+        actions += pipAction(PlayerPipCommand.AudioOnly.action, android.R.drawable.ic_lock_silent_mode, "Audio", "Audio only")
+        if (isVod) {
+            actions += pipAction(
+                PlayerPipCommand.PlayPause.action,
+                if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+                if (isPlaying) "Pause" else "Play",
+                if (isPlaying) "Pause" else "Play"
+            )
+        }
+        actions += pipAction(PlayerPipCommand.FullScreen.action, android.R.drawable.ic_menu_view, "Full", "Full screen")
+        builder.setActions(actions)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) builder.setAutoEnterEnabled(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) builder.setTitle(item.title.take(50))
+    }
+    return builder.build()
+}
+
+private fun Activity.pipAction(action: String, iconRes: Int, title: String, description: String): RemoteAction {
+    val intent = Intent(this, com.redplus.iptv.MainActivity::class.java).apply {
+        this.action = action
+        addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+    }
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+    val pendingIntent = PendingIntent.getActivity(this, action.hashCode(), intent, flags)
+    return RemoteAction(AndroidIcon.createWithResource(this, iconRes), title, description, pendingIntent)
+}
 
 private fun streamMimeType(url: String): String? {
     val clean = url.substringBefore('?').lowercase()

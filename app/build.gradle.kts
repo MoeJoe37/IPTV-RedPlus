@@ -13,15 +13,13 @@ android {
         applicationId = "com.redplus.iptv"
         minSdk = 24
         targetSdk = 35
-        versionCode = 8
-        versionName = "1.3.3"
+        versionCode = 10
+        versionName = "1.4.1"
         vectorDrawables { useSupportLibrary = true }
     }
 
     buildTypes {
         release {
-            // One-click local release APK: signed with the standard debug keystore so it can be installed directly.
-            // For Play Store/public distribution, replace this with your own private release signing config.
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             isMinifyEnabled = false
@@ -71,7 +69,5 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.5.1")
     implementation("androidx.media3:media3-datasource-okhttp:1.5.1")
 
-    // LibVLC is used for VOD/series playback because many IPTV VOD files use AC3/EAC3/DTS audio
-    // that some Android devices do not expose through MediaCodec/Media3.
     implementation("org.videolan.android:libvlc-all:3.6.5")
 }

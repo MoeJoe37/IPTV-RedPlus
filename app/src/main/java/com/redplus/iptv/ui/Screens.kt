@@ -824,10 +824,9 @@ fun SettingsScreen(session: Session, container: AppContainer, onLogout: () -> Un
                                     )
                                     SettingsNumberField("Manual proxy port", settings.manualProxyPort.coerceIn(0, 65535), 0, 65535) { save(settings.copy(manualProxyPort = it.coerceIn(0, 65535))) }
                                     Text("Active route: ${container.xtreamClient.currentRouteLabel()}", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                                    Text("1.1.1.1 is DNS, not a full VPN inside this app. The built-in DNS modes apply to Xtream API requests and the Media3 Live TV player. VOD uses LibVLC for audio compatibility; manual HTTP proxy is passed to LibVLC, but DNS-over-HTTPS routing is not available inside LibVLC.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
-                                    Text("No unknown public proxy list is bundled because open proxies are usually unstable and unsafe. You can enter a proxy you trust manually.", color = PremiumMuted, style = MaterialTheme.typography.bodySmall)
                                 }
                             }
+                            item { VpnGatePanel(container = container) }
                         }
                     }
                 }
